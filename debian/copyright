@@ -1,6 +1,6 @@
 Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
 Upstream-Name: libkdumpfile
-Upstream-Contact: cloud-init-dev@lists.launchpad.net
+Upstream-Contact: ptesarik@suse.com
 Source: https://github.com/ptesarik/libkdumpfile
 
 Files: *
