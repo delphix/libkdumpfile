@@ -27,13 +27,12 @@ jobs:
           #   "refs/head/release/6.0.1.0" -> "release_6-0-1-0"
           #
           gh_branch_name=$(echo "${{ github.ref }}" | cut -d / -f 3- )
-          echo "::set-env name=GH_BRANCH_NAME::$gh_branch_name"
+          echo "GH_BRANCH_NAME=$gh_branch_name" >> $GITHUB_ENV
           norm_branch_name=$(echo $gh_branch_name | tr /. _- )
-          echo "::set-env name=NORM_BRANCH_NAME::$norm_branch_name"
           deb_file=libkdumpfile_${norm_branch_name}.deb
-          echo "::set-env name=DEBIAN_FILE::$deb_file"
+          echo "DEBIAN_FILE=$deb_file" >> $GITHUB_ENV
           ddeb_file=libkdumpfile-dbgsym_${norm_branch_name}.ddeb
-          echo "::set-env name=DEBUG_DEBIAN_FILE::$ddeb_file"
+          echo "DEBUG_DEBIAN_FILE=$ddeb_file" >> $GITHUB_ENV
           #
           # We create a separate tag, even for the Delphix release
           # tags, to avoid touching any of the original references
@@ -41,7 +40,7 @@ jobs:
           # releases needing a corresponding tag to be linked with).
           #
           gh_release_tag=github_${norm_branch_name}
-          echo "::set-env name=RELEASE_TAG::$gh_release_tag"
+          echo "RELEASE_TAG=$gh_release_tag" >> $GITHUB_ENV
       - name: Install dependencies
         run: ./.github/scripts/install-deps.sh
       - name: Perform build and generate package
