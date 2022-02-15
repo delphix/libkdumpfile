@@ -684,12 +684,21 @@ map_linux_x86_64(struct os_init_data *ctl)
 	};
 
 	addrxlat_meth_t *meth;
+	addrxlat_addr_t sme_mask;
 	addrxlat_status status;
 
 	/* Set up page table translation. */
 	sys_sym_pgtroot(ctl, pgtspec);
 	meth = &ctl->sys->meth[ADDRXLAT_SYS_METH_PGT];
 	meth->param.pgt.root.addr &= ~PAGE_MASK;
+
+	status = get_number(ctl->ctx, "sme_mask", &sme_mask);
+	if (status == ADDRXLAT_OK)
+		meth->param.pgt.pte_mask = sme_mask;
+	else if (status == ADDRXLAT_ERR_NODATA)
+		clear_error(ctl->ctx);
+	else
+		return status;
 
 	/* Take care of machine physical <-> kernel physical mapping. */
 	if (ctl->popt.val[OPT_xen_xlat].set &&
@@ -940,19 +949,19 @@ static const struct sys_region layout_5level[] = {
 	SYS_REGION_END
 };
 
-/** Initialize a translation map for an x86_64 OS.
- * @param ctl  Initialization data.
- * @returns    Error status.
+/** Initialize the page table translation method.
+ * @param ctl      Initialization data.
+ * @returns        Error status.
  */
-addrxlat_status
-sys_x86_64(struct os_init_data *ctl)
+static addrxlat_status
+init_pgt_meth(struct os_init_data *ctl)
 {
 	static const addrxlat_paging_form_t x86_64_pf = {
 		.pte_format = ADDRXLAT_PTE_X86_64,
 		.nfields = 5,
 		.fieldsz = { 12, 9, 9, 9, 9, 9 }
 	};
-	addrxlat_map_t *map;
+
 	addrxlat_meth_t *meth;
 	addrxlat_status status;
 
@@ -963,17 +972,42 @@ sys_x86_64(struct os_init_data *ctl)
 		meth->param.pgt.root = ctl->popt.val[OPT_rootpgt].fulladdr;
 	else
 		meth->param.pgt.root.as = ADDRXLAT_NOADDR;
-	meth->param.pgt.pte_mask =
-		opt_num_default(&ctl->popt, OPT_pte_mask, 0);
+	meth->param.pgt.pte_mask = 0;
 	meth->param.pgt.pf = x86_64_pf;
 
-	if (ctl->popt.val[OPT_levels].set) {
-		long levels = ctl->popt.val[OPT_levels].num;
-		if (levels < 4 || levels > 5)
-			return bad_paging_levels(ctl->ctx, levels);
-		meth->param.pgt.pf.nfields = levels + 1;
+	if (ctl->osdesc->type == ADDRXLAT_OS_LINUX) {
+		addrxlat_addr_t l5_enabled;
+
+		status = get_number(ctl->ctx, "pgtable_l5_enabled",
+				    &l5_enabled);
+		if (status == ADDRXLAT_OK)
+			meth->param.pgt.pf.nfields = !!l5_enabled + 5;
+		else if (status == ADDRXLAT_ERR_NODATA)
+			clear_error(ctl->ctx);
+		else
+			return set_error(ctl->ctx, status,
+					 "Cannot determine 5-level paging");
 	}
 
+	return ADDRXLAT_OK;
+}
+
+/** Initialize a translation map for an x86_64 OS.
+ * @param ctl  Initialization data.
+ * @returns    Error status.
+ */
+addrxlat_status
+sys_x86_64(struct os_init_data *ctl)
+{
+	addrxlat_map_t *map;
+	addrxlat_meth_t *meth;
+	addrxlat_status status;
+
+	status = init_pgt_meth(ctl);
+	if (status != ADDRXLAT_OK)
+		return status;
+
+	meth = &ctl->sys->meth[ADDRXLAT_SYS_METH_PGT];
 	status = sys_set_layout(ctl, ADDRXLAT_SYS_MAP_HW,
 				(meth->param.pgt.pf.nfields == 6
 				 ? layout_5level

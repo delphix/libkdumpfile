@@ -50,9 +50,6 @@ enum pte_type {
 	PTE_TYPE_TABLE = 3,	/**< Table descriptor. */
 };
 
-/** 1G page mask. */
-#define PAGE_MASK_1G		ADDR_MASK(30)
-
 /** Descriptive names for page tables.
  * These names are used in error messages.
  */
@@ -61,6 +58,8 @@ static const char pgt_full_name[][16] = {
 	"Level 3 table",
 	"Level 2 table",
 	"Level 1 table",
+	"Level 0 table",
+	"Level -1 table",
 };
 
 /** Short names for page table entries.
@@ -72,6 +71,7 @@ static const char pte_name[][4] = {
 	"pte",
 	"pmd",
 	"pud",
+	"p4d",
 	"pgd",
 };
 
@@ -128,11 +128,12 @@ pgt_aarch64(addrxlat_step_t *step)
 	step->base.as = step->meth->target_as;
 
 	if (PTE_TYPE(pte) == PTE_TYPE_BLOCK) {
-		addrxlat_addr_t mask = pf_table_mask(
-			&step->meth->param.pgt.pf, step->remain);
-		if (mask > PAGE_MASK_1G)
+		if (step->remain > 4 ||
+		    (step->remain > 3 &&
+		     step->meth->param.pgt.pf.fieldsz[0] != 9))
 			return pte_invalid(step);
-		step->base.addr &= ~mask;
+		step->base.addr &= ~pf_table_mask(
+			&step->meth->param.pgt.pf, step->remain);
 		return pgt_huge_page(step);
 	}
 
@@ -299,8 +300,7 @@ init_pgt_meth(struct os_init_data *ctl, unsigned va_bits)
 	meth->target_as = ADDRXLAT_MACHPHYSADDR;
 
 	pgt->root.as = ADDRXLAT_NOADDR;
-	pgt->pte_mask = opt_num_default(&ctl->popt, OPT_pte_mask, 0);
-
+	pgt->pte_mask = 0;
 	pgt->pf.pte_format = ADDRXLAT_PTE_AARCH64;
 
 	if (!ctl->popt.val[OPT_pagesize].set)
@@ -351,10 +351,14 @@ map_linux_aarch64(struct os_init_data *ctl)
 	addrxlat_meth_t *meth;
 	addrxlat_status status;
 	addrxlat_addr_t va_bits;
-	addrxlat_addr_t va_range;
 
-	status = get_number(ctl->ctx, "VA_BITS",
-			    &va_bits);
+	status = get_number(ctl->ctx, "TCR_EL1_T1SZ", &va_bits);
+	if (status == ADDRXLAT_OK) {
+		va_bits = 64 - va_bits;
+	} else if (status == ADDRXLAT_ERR_NODATA) {
+		clear_error(ctl->ctx);
+		status = get_number(ctl->ctx, "VA_BITS", &va_bits);
+	}
 	if (status != ADDRXLAT_OK)
 		return set_error(ctl->ctx, status,
 				 "Cannot determine VA_BITS");
@@ -374,9 +378,8 @@ map_linux_aarch64(struct os_init_data *ctl)
 	}
 
 	/* layout depends on current value of va_bits */
-	va_range = ((addrxlat_addr_t)1 << va_bits) - 1;
-	aarch64_layout_generic[0].last = va_range;
-	aarch64_layout_generic[1].first = VIRTADDR_MAX - va_range;
+	aarch64_layout_generic[0].last = ADDR_MASK(va_bits);
+	aarch64_layout_generic[1].first = VIRTADDR_MAX - ADDR_MASK(va_bits);
 
 	status = sys_set_layout(ctl, ADDRXLAT_SYS_MAP_HW,
 				aarch64_layout_generic);
