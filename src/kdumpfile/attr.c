@@ -81,16 +81,6 @@ static_attr_value(struct kdump_shared *shared, enum global_keyidx idx)
 		((char*)shared + static_offsets[idx - GKI_static_first]);
 }
 
-/**  Calculate the hash index of a key path.
- * @param key  Key path.
- * @returns    Desired index in the hash table.
- */
-static unsigned
-key_hash_index(const char *key)
-{
-	return fold_hash(string_hash(key), ATTR_HASH_BITS);
-}
-
 /**  Get the length of an attribute path
  * @param attr  Attribute data.
  * @returns     Length of the full path string.
@@ -189,6 +179,24 @@ path_hash(struct phash *ph, const struct attr_data *dir)
 		phash_update(ph, tmpl->key, strlen(tmpl->key));
 		phash_update(ph, ".", 1);
 	}
+}
+
+/**  Calculate the hash index of an attribute.
+ * @param attr  Attribute.
+ * @returns     Desired index in the hash table.
+ */
+static unsigned
+attr_hash_index(const struct attr_data *attr)
+{
+	const struct attr_template *tmpl;
+	struct phash ph;
+
+	phash_init(&ph);
+	if (attr->parent)
+		path_hash(&ph, attr->parent);
+	tmpl = attr->template;
+	phash_update(&ph, tmpl->key, strlen(tmpl->key));
+	return fold_hash(phash_value(&ph), ATTR_HASH_BITS);
 }
 
 /**  Look up a child attribute of a given directory.
@@ -298,8 +306,6 @@ alloc_attr(struct attr_dict *dict, struct attr_data *parent,
 	   const struct attr_template *tmpl)
 {
 	struct attr_data *d;
-	size_t pathlen;
-	char *path;
 	unsigned hash;
 
 	d = calloc(1, sizeof *d);
@@ -308,10 +314,7 @@ alloc_attr(struct attr_dict *dict, struct attr_data *parent,
 
 	d->parent = parent;
 	d->template = tmpl;
-	pathlen = attr_pathlen(d);
-	path = alloca(pathlen + 1);
-	make_attr_path(d, path + pathlen);
-	hash = key_hash_index(path);
+	hash = attr_hash_index(d);
 	hlist_add_head(&d->list, &dict->attr.table[hash]);
 
 	return d;
@@ -571,6 +574,11 @@ create_attr_path(struct attr_dict *dict, struct attr_data *dir,
 	return attr;
 }
 
+/** Copy attribute data.
+ * @param dest  Destination attribute.
+ * @param src   Source attribute.
+ * @returns     @c true on success, @c false on allocation failure
+ */
 static bool
 copy_data(struct attr_data *dest, const struct attr_data *src)
 {
@@ -603,14 +611,66 @@ copy_data(struct attr_data *dest, const struct attr_data *src)
 	}
 }
 
+/** Clone an attribute.
+ * @param dict    Destination attribute dictionary.
+ * @param dir     Target attribute directory.
+ * @param orig    Attribute to be cloned.
+ * @returns       Attribute data, or @c NULL on allocation failure.
+ */
+static struct attr_data *
+clone_attr(struct attr_dict *dict, struct attr_data *dir,
+	   struct attr_data *orig)
+{
+	struct attr_data *newattr;
+
+	newattr = new_attr(dict, dir, orig->template);
+	if (!newattr)
+		return NULL;
+
+	if (attr_isset(orig) && !copy_data(newattr, orig))
+		return NULL;
+
+	/* If this is a global attribute, update global_attrs[] */
+	if (newattr->template >= global_keys &&
+	    newattr->template < &global_keys[NR_GLOBAL_ATTRS]) {
+		enum global_keyidx idx = newattr->template - global_keys;
+		dict->global_attrs[idx] = newattr;
+	}
+
+	return newattr;
+}
+
+/** Clone an attribute subtree.
+ * @param dict    Destination attribute dictionary.
+ * @param dir     Target attribute directory.
+ * @param orig    Attribute directory to be cloned.
+ * @returns       @c true on success, @c false on allocation failure.
+ */
+static bool
+clone_subtree(struct attr_dict *dict, struct attr_data *dir,
+	      struct attr_data *orig)
+{
+	for (orig = orig->dir; orig; orig = orig->next) {
+		struct attr_data *newattr;
+		newattr = clone_attr(dict, dir, orig);
+		if (!newattr)
+			return false;
+		if (orig->template->type == KDUMP_DIRECTORY &&
+		    !clone_subtree(dict, newattr, orig))
+			return false;
+	}
+
+	return true;
+}
+
 /** Clone an attribute including full path.
  * @param dict    Destination attribute dictionary.
- * @param attr    Attribute to be cloned.
+ * @param orig    Attribute to be cloned.
  * @returns       Attribute data, or @c NULL on allocation failure.
  *
- * Look up the attribute @p path under @p dir. If the attribute does not
- * exist yet, create it with type @p type. If @p path contains dots, then
- * all path elements are also created as necessary.
+ * Make a copy of @p attr in the target dictionary @p dict. Make sure
+ * that all path components of the new target are also cloned in the
+ * target dictionary.
  */
 struct attr_data *
 clone_attr_path(struct attr_dict *dict, struct attr_data *orig)
@@ -619,6 +679,7 @@ clone_attr_path(struct attr_dict *dict, struct attr_data *orig)
 	const char *p, *endp, *endpath;
 	size_t pathlen;
 	struct attr_data *attr;
+	struct attr_data *base;
 
 	pathlen = attr_pathlen(orig) + 1;
 	path = alloca(pathlen + 1);
@@ -633,27 +694,34 @@ clone_attr_path(struct attr_dict *dict, struct attr_data *orig)
 			break;
 		}
 
+	base = attr;
 	while (endp && endp != endpath) {
+		struct attr_data *newattr;
+
 		p = endp + 1;
 		endp = memchr(p, '.', endpath - p);
 		orig = endp
 			? lookup_attr_part(dict, path + 1, endp - path - 1)
 			: lookup_attr(dict, path + 1);
-		attr = new_attr(dict, attr, orig->template);
-		if (!attr)
-			return NULL;
-		if (attr_isset(orig) && !copy_data(attr, orig))
-			return NULL;
-
-		/* If this is a global attribute, update global_attrs[] */
-		if (attr->template >= global_keys &&
-		    attr->template < &global_keys[NR_GLOBAL_ATTRS]) {
-			enum global_keyidx idx = attr->template - global_keys;
-			dict->global_attrs[idx] = attr;
-		}
+		newattr = clone_attr(dict, attr, orig);
+		if (!newattr)
+			goto err;
+		attr = newattr;
 	}
 
+	if (orig->template->type == KDUMP_DIRECTORY &&
+	    !clone_subtree(dict, attr, orig))
+		goto err;
+
 	return attr;
+
+ err:
+	while (attr != base) {
+		struct attr_data *next = attr->parent;
+		dealloc_attr(attr);
+		attr = next;
+	}
+	return NULL;
 }
 
 /**  Instantiate a directory path.

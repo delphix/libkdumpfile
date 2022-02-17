@@ -222,7 +222,7 @@ check_pae(struct os_init_data *ctl, const addrxlat_fulladdr_t *root,
 	step.base.addr = direct;
 	status = internal_walk(&step);
 	if (status == ADDRXLAT_OK && step.base.addr == 0) {
-		ctl->popt.val[OPT_levels].num = 3;
+		ctl->popt.levels = 3;
 		return ADDRXLAT_OK;
 	}
 
@@ -241,7 +241,7 @@ check_pae(struct os_init_data *ctl, const addrxlat_fulladdr_t *root,
 	step.base.addr = direct;
 	status = internal_walk(&step);
 	if (status == ADDRXLAT_OK && step.base.addr == 0) {
-		ctl->popt.val[OPT_levels].num = 2;
+		ctl->popt.levels = 2;
 		return ADDRXLAT_OK;
 	}
 
@@ -293,8 +293,8 @@ sys_ia32_nonpae(struct os_init_data *ctl)
 	meth = &ctl->sys->meth[ADDRXLAT_SYS_METH_PGT];
 	meth->kind = ADDRXLAT_PGT;
 	meth->target_as = ADDRXLAT_MACHPHYSADDR;
-	if (ctl->popt.val[OPT_rootpgt].set)
-		meth->param.pgt.root = ctl->popt.val[OPT_rootpgt].fulladdr;
+	if (ctl->popt.isset[OPT_rootpgt])
+		meth->param.pgt.root = ctl->popt.rootpgt;
 	else
 		meth->param.pgt.root.as = ADDRXLAT_NOADDR;
 	meth->param.pgt.pte_mask = 0;
@@ -319,8 +319,8 @@ sys_ia32_pae(struct os_init_data *ctl)
 	meth = &ctl->sys->meth[ADDRXLAT_SYS_METH_PGT];
 	meth->kind = ADDRXLAT_PGT;
 	meth->target_as = ADDRXLAT_MACHPHYSADDR;
-	if (ctl->popt.val[OPT_rootpgt].set)
-		meth->param.pgt.root = ctl->popt.val[OPT_rootpgt].fulladdr;
+	if (ctl->popt.isset[OPT_rootpgt])
+		meth->param.pgt.root = ctl->popt.rootpgt;
 	else
 		meth->param.pgt.root.as = ADDRXLAT_NOADDR;
 	meth->param.pgt.pte_mask = 0;
@@ -486,7 +486,6 @@ sys_ia32(struct os_init_data *ctl)
 
 	addrxlat_range_t range;
 	addrxlat_map_t *newmap;
-	struct optval *rootpgtopt;
 	long levels;
 	addrxlat_status status;
 
@@ -498,17 +497,17 @@ sys_ia32(struct os_init_data *ctl)
 					 "Cannot set up directmap");
 	}
 
-	rootpgtopt = &ctl->popt.val[OPT_rootpgt];
-
 	status = ADDRXLAT_OK;
-	if (!ctl->popt.val[OPT_levels].set) {
-		if (!rootpgtopt->set)
+	if (!ctl->popt.isset[OPT_levels]) {
+		addrxlat_fulladdr_t *rootpgtopt = &ctl->popt.rootpgt;
+
+		if (!ctl->popt.isset[OPT_rootpgt])
 			status = check_pae_sym(ctl);
 		else if (ctl->osdesc->type == ADDRXLAT_OS_LINUX)
-			status = check_pae(ctl, &rootpgtopt->fulladdr,
+			status = check_pae(ctl, rootpgtopt,
 					   LINUX_DIRECTMAP);
 		else if (ctl->osdesc->type == ADDRXLAT_OS_XEN)
-			status = check_pae(ctl, &rootpgtopt->fulladdr,
+			status = check_pae(ctl, rootpgtopt,
 					   XEN_DIRECTMAP);
 		else
 			status = ADDRXLAT_ERR_NOTIMPL;
@@ -530,7 +529,7 @@ sys_ia32(struct os_init_data *ctl)
 		return set_error(ctl->ctx, status,
 				 "Cannot set up hardware mapping");
 
-	levels = ctl->popt.val[OPT_levels].num;
+	levels = ctl->popt.levels;
 	if (levels == 2)
 		status = sys_ia32_nonpae(ctl);
 	else if (levels == 3)

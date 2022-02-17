@@ -828,7 +828,6 @@ INTERNAL_DECL(kdump_status, create_xen_cpu_regs,
 	       struct derived_attr_def *def, unsigned ndef));
 
 /* hashing */
-INTERNAL_DECL(unsigned long, string_hash, (const char *s));
 INTERNAL_DECL(unsigned long, mem_hash, (const char *s, size_t len));
 
 /**  Partial hash.
@@ -931,6 +930,8 @@ INTERNAL_DECL(kdump_status, process_arch_notes,
 
 /* Virtual address space regions */
 INTERNAL_DECL(addrxlat_ctx_t *, init_addrxlat, (kdump_ctx_t *ctx));
+
+INTERNAL_DECL(kdump_status, create_addrxlat_attrs, (struct attr_dict *dict));
 
 INTERNAL_DECL(kdump_status, vtop_init, (kdump_ctx_t *ctx));
 

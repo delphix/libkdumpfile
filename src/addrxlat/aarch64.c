@@ -303,13 +303,13 @@ init_pgt_meth(struct os_init_data *ctl, unsigned va_bits)
 	pgt->pte_mask = 0;
 	pgt->pf.pte_format = ADDRXLAT_PTE_AARCH64;
 
-	if (!ctl->popt.val[OPT_pagesize].set)
+	if (!ctl->popt.isset[OPT_pagesize])
 		return set_error(ctl->ctx, ADDRXLAT_ERR_NODATA,
 				 "Cannot determine page size");
-	page_bits = ffsl(ctl->popt.val[OPT_pagesize].num) - 1;
+	page_bits = ffsl(ctl->popt.pagesize) - 1;
 
-	if (ctl->popt.val[OPT_levels].set) {
-		long levels = ctl->popt.val[OPT_levels].num;
+	if (ctl->popt.isset[OPT_levels]) {
+		long levels = ctl->popt.levels;
 		if (levels < 3 || levels > 5)
 			return bad_paging_levels(ctl->ctx, levels);
 		pgt->pf.nfields = levels + 1;
@@ -369,8 +369,8 @@ map_linux_aarch64(struct os_init_data *ctl)
 
 	meth = &ctl->sys->meth[ADDRXLAT_SYS_METH_PGT];
 	*meth = ctl->sys->meth[ADDRXLAT_SYS_METH_UPGT];
-	if (ctl->popt.val[OPT_rootpgt].set)
-		meth->param.pgt.root = ctl->popt.val[OPT_rootpgt].fulladdr;
+	if (ctl->popt.isset[OPT_rootpgt])
+		meth->param.pgt.root = ctl->popt.rootpgt;
 	else {
 		status = get_linux_pgtroot(ctl, &meth->param.pgt.root);
 		if (status != ADDRXLAT_OK)

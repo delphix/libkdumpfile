@@ -59,7 +59,7 @@ libkdumpfile_la_LIBADD = \
 	$(SNAPPY_LIBS)	\
 	$(ZSTD_LIBS)
 
-libkdumpfile_la_LDFLAGS = -version-info 9:0:0
+libkdumpfile_la_LDFLAGS = -version-info 10:0:0
 
 if HAVE_LD_VERSION_SCRIPT
 libkdumpfile_la_LDFLAGS += -Wl,--version-script=$(srcdir)/libkdumpfile.map
@@ -74,7 +74,10 @@ noinst_HEADERS = \
 dist_noinst_DATA = \
 	libkdumpfile.map
 
-check_PROGRAMS = test-fcache test-blob
+check_PROGRAMS = \
+	test-blob \
+	test-clone-attr \
+	test-fcache
 
 test_fcache_LDFLAGS = -static
 test_fcache_LDADD = libkdumpfile.la -ldl
@@ -82,8 +85,12 @@ test_fcache_LDADD = libkdumpfile.la -ldl
 test_blob_LDFLAGS = -static
 test_blob_LDADD = libkdumpfile.la -ldl
 
+test_clone_attr_LDFLAGS = -static
+test_clone_attr_LDADD = libkdumpfile.la -ldl
+
 TESTS = \
 	test-blob \
+	test-clone-attr \
 	test-fcache
 
 clean-local:

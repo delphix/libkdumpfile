@@ -148,8 +148,8 @@ get_pgtroot(struct os_init_data *ctl, addrxlat_fulladdr_t *root)
 {
 	addrxlat_status status;
 
-	if (ctl->popt.val[OPT_rootpgt].set)
-		*root = ctl->popt.val[OPT_rootpgt].fulladdr;
+	if (ctl->popt.isset[OPT_rootpgt])
+		*root = ctl->popt.rootpgt;
 	else
 		root->as = ADDRXLAT_NOADDR;
 
@@ -198,7 +198,7 @@ get_levels_from_pgt(struct os_init_data *ctl)
 		if (status != ADDRXLAT_OK)
 			return status;
 		if (!PTE_I(entry)) {
-			ctl->popt.val[OPT_levels].num = PTE_TT(entry) + 2;
+			ctl->popt.levels = PTE_TT(entry) + 2;
 			return ADDRXLAT_OK;
 		}
 		ptr.addr += sizeof(uint64_t);
@@ -227,12 +227,12 @@ init_paging_form(struct os_init_data *ctl)
 	meth = &ctl->sys->meth[ADDRXLAT_SYS_METH_PGT];
 
 	status = get_pgtroot(ctl, &meth->param.pgt.root);
-	if (status == ADDRXLAT_OK && !ctl->popt.val[OPT_levels].set)
+	if (status == ADDRXLAT_OK && !ctl->popt.isset[OPT_levels])
 		status = get_levels_from_pgt(ctl);
 	if (status != ADDRXLAT_OK)
 		return status;
 
-	levels = ctl->popt.val[OPT_levels].num;
+	levels = ctl->popt.levels;
 	if (levels < 2 || levels > 5)
 		return bad_paging_levels(ctl->ctx, levels);
 

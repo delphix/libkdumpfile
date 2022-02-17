@@ -169,25 +169,15 @@ strtoas(const char *str, char **endptr)
 	return ADDRXLAT_NOADDR;
 }
 
-/** Type of option. */
-enum opttype {
-	opt_string,		/**< Unparsed string option */
-	opt_number,		/**< Signed number */
-	opt_bool,		/**< Boolean value */
-	opt_addr,		/**< Simple address or offset */
-	opt_fulladdr,		/**< Full address */
-};
-
 /** Option description. */
 struct optdesc {
 	enum optidx idx;	/**< Option index */
-	enum opttype type;	/**< Type of option (string, number, ...) */
 	const char name[];	/**< Option name */
 };
 
 /** Define an option without repeating its name. */
-#define DEF(name, type)				\
-	{ { OPT_ ## name, opt_ ## type }, #name }
+#define DEF(name)				\
+	{ { OPT_ ## name, }, #name }
 
 /** Option table terminator. */
 #define END					\
@@ -198,7 +188,7 @@ static const struct {
 	struct optdesc opt;
 	char name[7];
 } opt6[] = {
-	DEF(levels, number),
+	DEF(levels),
 	END
 };
 
@@ -207,7 +197,7 @@ static const struct {
 	struct optdesc opt;
 	char name[8];
 } opt7[] = {
-	DEF(rootpgt, fulladdr),
+	DEF(rootpgt),
 	END
 };
 
@@ -216,8 +206,8 @@ static const struct {
 	struct optdesc opt;
 	char name[9];
 } opt8[] = {
-	DEF(pagesize, number),
-	DEF(xen_xlat, bool),
+	DEF(pagesize),
+	DEF(xen_xlat),
 	END
 };
 
@@ -226,7 +216,7 @@ static const struct {
 	struct optdesc opt;
 	char name[10];
 } opt9[] = {
-	DEF(phys_base, addr),
+	DEF(phys_base),
 	END
 };
 
@@ -235,7 +225,7 @@ static const struct {
 	struct optdesc opt;
 	char name[12];
 } opt11[] = {
-	DEF(xen_p2m_mfn, number),
+	DEF(xen_p2m_mfn),
 	END
 };
 
@@ -253,90 +243,180 @@ static const struct {
 	DEFPTR(11),
 };
 
+/** Result of parsing a single value. */
+typedef enum {
+	PARSE_OK,		/**< Success. */
+	PARSE_UNKNOWN,		/**< Unknown option. */
+	PARSE_NOVAL,		/**< Missing value. */
+	PARSE_BADVAL,		/**< Invalid value. */
+}  parse_status;
+
+#define NAME(name)	[OPT_ ## name] = #name
+
+/** Human-readable option names. */
+static const char optnames[OPT_NUM][16] = {
+	NAME(levels),
+	NAME(pagesize),
+	NAME(phys_base),
+	NAME(rootpgt),
+	NAME(xen_p2m_mfn),
+	NAME(xen_xlat),
+};
+
+/** Parse a boolean option value.
+ * @param str[in]   String value.
+ * @param var[out]  Output variable.
+ * @returns         Error status.
+ */
+static parse_status
+parse_bool(const char *str, bool *var)
+{
+	char *endp;
+
+	if (!str ||
+	    !strcasecmp(str, "yes") ||
+	    !strcasecmp(str, "true")) {
+		*var = true;
+	} else if (!strcasecmp(str, "no") ||
+		   !strcasecmp(str, "false")) {
+		*var = false;
+	} else {
+		*var = !!strtol(str, &endp, 0);
+		if (!*str || *endp)
+			return PARSE_BADVAL;
+	}
+
+	return PARSE_OK;
+}
+
+/** Parse a number option value.
+ * @param str[in]   String value.
+ * @param var[out]  Output variable.
+ * @returns         Error status.
+ */
+static parse_status
+parse_number(const char *str, long *var)
+{
+	char *endp;
+
+	if (!str)
+		return PARSE_NOVAL;
+
+	*var = strtol(str, &endp, 0);
+	if (!*str || *endp)
+		return PARSE_BADVAL;
+
+	return PARSE_OK;
+}
+
+/** Parse an address option value.
+ * @param str[in]   String value.
+ * @param var[out]  Output variable.
+ * @returns         Error status.
+ */
+static parse_status
+parse_addr(const char *str, addrxlat_addr_t *var)
+{
+	char *endp;
+
+	if (!str)
+		return PARSE_NOVAL;
+
+	*var = strtoull(str, &endp, 0);
+	if (!*str || *endp)
+		return PARSE_BADVAL;
+
+	return PARSE_OK;
+}
+
+/** Parse a full address option value.
+ * @param str[in]   String value.
+ * @param var[out]  Output variable.
+ * @returns         Error status.
+ */
+static parse_status
+parse_fulladdr(const char *str, addrxlat_fulladdr_t *var)
+{
+	char *endp;
+
+	if (!str)
+		return PARSE_NOVAL;
+
+	var->as = strtoas(str, &endp);
+	if (*str == ':' || *endp != ':')
+		return PARSE_BADVAL;
+
+	str = endp + 1;
+	var->addr = strtoull(str, &endp, 0);
+	if (!*str || *endp)
+		return PARSE_BADVAL;
+
+	return PARSE_OK;
+}
+
 /** Parse a single option value.
  * @param popt   Parsed options.
- * @param ctx    Translation context (for error handling).
- * @param opt    Option descriptor.
+ * @param opt    Option index.
  * @param val    Value.
  * @returns      Error status.
  */
-static addrxlat_status
-parse_val(struct parsed_opts *popt, addrxlat_ctx_t *ctx,
-	  const struct optdesc *opt, const char *val)
+static parse_status
+parse_val(struct parsed_opts *popt, enum optidx opt, const char *val)
 {
-	struct optval *optval = &popt->val[opt->idx];
-	char *endp;
+	switch (opt) {
+	case OPT_levels:
+		return parse_number(val, &popt->levels);
 
-	switch (opt->type) {
-	case opt_string:
-		optval->str = val;
-		break;
+	case OPT_pagesize:
+		return parse_number(val, &popt->pagesize);
 
-	case opt_bool:
-		if (!val ||
-		    !strcasecmp(val, "yes") ||
-		    !strcasecmp(val, "true")) {
-			optval->num = 1;
-			break;
-		} else if (!strcasecmp(val, "no") ||
-			   !strcasecmp(val, "false")) {
-			optval->num = 0;
-			break;
-		}
-		/* else fall-through */
+	case OPT_phys_base:
+		return parse_addr(val, &popt->phys_base);
 
-	case opt_number:
-		if (!val)
-			goto err_noval;
+	case OPT_rootpgt:
+		return parse_fulladdr(val, &popt->rootpgt);
 
-		optval->num = strtol(val, &endp, 0);
-		if (!*val || *endp)
-			goto err_badval;
+	case OPT_xen_p2m_mfn:
+		return parse_number(val, &popt->xen_p2m_mfn);
 
-		break;
+	case OPT_xen_xlat:
+		return parse_bool(val, &popt->xen_xlat);
 
-	case opt_addr:
-		if (!val)
-			goto err_noval;
+	default:
+		return PARSE_UNKNOWN;
+	}
+}
 
-		optval->addr = strtoull(val, &endp, 0);
-		if (!*val || *endp)
-			goto err_badval;
+/** Parse a single option.
+ * @param ctx    Translation context.
+ * @param opt    Option index.
+ * @param val    Option value.
+ * @param err    Parsing error code.
+ * @returns      Error status.
+ */
+static addrxlat_status
+parse_error(addrxlat_ctx_t *ctx, enum optidx opt,
+	    const char *val, parse_status err)
+{
+	switch (err) {
+	case PARSE_UNKNOWN:
+		return set_error(ctx, ADDRXLAT_ERR_NOTIMPL,
+				 "Unknown option: %u", (unsigned) opt);
 
-		break;
+	case PARSE_NOVAL:
+		return set_error(ctx, ADDRXLAT_ERR_INVALID,
+				 "Missing value for option '%s'",
+				 optnames[opt]);
 
-	case opt_fulladdr:
-		if (!val)
-			goto err_noval;
-
-		optval->fulladdr.as = strtoas(val, &endp);
-		if (*val == ':' || *endp != ':')
-			goto err_badval;
-
-		val = endp + 1;
-		optval->fulladdr.addr = strtoull(val, &endp, 0);
-		if (!*val || *endp)
-			goto err_badval;
-
-		break;
+	case PARSE_BADVAL:
+		return set_error(ctx, ADDRXLAT_ERR_INVALID,
+				 "'%s' is not a valid value for option '%s'",
+				 val, optnames[opt]);
 
 	default:
 		return set_error(ctx, ADDRXLAT_ERR_NOTIMPL,
-				 "Unknown option type: %u",
-				 (unsigned) opt->type);
+				 "Unknown parser error");
 	}
-
-	optval->set = 1;
-	return ADDRXLAT_OK;
-
- err_noval:
-	return set_error(ctx, ADDRXLAT_ERR_INVALID,
-			 "Missing value for option '%s'", opt->name);
-
- err_badval:
-	return set_error(ctx, ADDRXLAT_ERR_INVALID,
-			 "'%s' is not a valid value for option '%s'",
-			 val, opt->name);
 }
 
 /** Parse a single option.
@@ -352,6 +432,7 @@ parse_opt(struct parsed_opts *popt, addrxlat_ctx_t *ctx,
 	  const char *key, size_t klen, const char *val)
 {
 	const struct optdesc *opt;
+	parse_status status;
 
 	if (klen >= ARRAY_SIZE(options))
 		goto err;
@@ -361,8 +442,14 @@ parse_opt(struct parsed_opts *popt, addrxlat_ctx_t *ctx,
 		goto err;
 
 	while (opt->idx != OPT_NUM) {
-		if (!strcasecmp(key, opt->name))
-			return parse_val(popt, ctx, opt, val);
+		if (!strcasecmp(key, opt->name)) {
+			status = parse_val(popt, opt->idx, val);
+			if (status != PARSE_OK)
+				return parse_error(ctx, opt->idx, val, status);
+			popt->isset[opt->idx] = true;
+			return ADDRXLAT_OK;
+		}
+
 		opt = (void*)(opt) + options[klen].elemsz;
 	}
 
@@ -385,7 +472,7 @@ parse_opts(struct parsed_opts *popt, addrxlat_ctx_t *ctx, const char *opts)
 	addrxlat_status status;
 
 	for (idx = 0; idx < OPT_NUM; ++idx)
-		popt->val[idx].set = 0;
+		popt->isset[idx] = false;
 
 	if (!opts)
 		return ADDRXLAT_OK;

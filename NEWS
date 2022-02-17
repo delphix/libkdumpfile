@@ -2,6 +2,9 @@ next
 ----
   * Zstandard compression algorithm
   * AArch64 52-bit VA
+  * Address translation tuning with addrxlat.default.* and addrxlat.force.*
+    attributes.
+    The old mechanism using addrxlat.opts is no longer available.
 
 0.4.1
 -----

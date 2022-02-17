@@ -39,6 +39,8 @@
 #include "../internal.h"
 #include "../errmsg.h"
 
+#include <stdbool.h>
+
 /* Older glibc didn't have the byteorder macros */
 #ifndef be16toh
 
@@ -404,16 +406,13 @@ enum optidx {
 };
 
 /** Single option value. */
-struct optval {
-	unsigned char set;	/**< Non-zero if the option was specified. */
-	union {
-		const char *str;	/**< String(-like) values. */
-		long num;		/**< Number(-like) values. */
-		addrxlat_addr_t addr;  /**< Simple address or offset. */
+union optval {
+	const char *str;	/**< String(-like) values. */
+	long num;		/**< Number(-like) values. */
+	addrxlat_addr_t addr;	/**< Simple address or offset. */
 
-		/** Full address (with address space).*/
-		addrxlat_fulladdr_t fulladdr;
-	};
+	/** Full address (with address space).*/
+	addrxlat_fulladdr_t fulladdr;
 };
 
 /** This structure holds parsed options. */
@@ -421,24 +420,20 @@ struct parsed_opts {
 	/** Buffer for parsed option values. */
 	char *buf;
 
-	/** Parsed option values. */
-	struct optval val[OPT_NUM];
+	/** Set/unset flag for each option. */
+	bool isset[OPT_NUM];
+
+	unsigned long levels;		/**< Value of OPT_levels. */
+	unsigned long pagesize;		/**< Value of OPT_pagesize. */
+	addrxlat_addr_t phys_base;	/**< Value of OPT_phys_base. */
+	addrxlat_fulladdr_t rootpgt;	/**< Value of OPT_rootpgt. */
+	unsigned long xen_p2m_mfn;	/**< Value of OPT_xen_p2m_mfn. */
+	bool xen_xlat;			/**< Value of OPT_xen_xlat. */
 };
 
 INTERNAL_DECL(addrxlat_status, parse_opts,
 	      (struct parsed_opts *popt, addrxlat_ctx_t *ctx,
 	       const char *opts));
-
-/** Get a numeric option, with fallback to default value.
- * @param opt Parsed options.
- * @param idx Option index.
- * @param def Default value if the option is not set.
- */
-static inline long
-opt_num_default(const struct parsed_opts *opts, enum optidx idx, long def)
-{
-	return opts->val[idx].set ? opts->val[idx].num : def;
-}
 
 /* Translation system */
 
@@ -503,6 +498,8 @@ INTERNAL_DECL(addrxlat_status, sys_sym_pgtroot,
 	      (struct os_init_data *ctl, const struct sym_spec *spec));
 
 /* internal aliases */
+
+DECLARE_ALIAS(addrspace_name);
 
 #define set_error internal_ctx_err
 DECLARE_ALIAS(ctx_err);
