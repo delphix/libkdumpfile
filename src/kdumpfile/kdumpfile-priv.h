@@ -431,6 +431,9 @@ struct attr_template {
 		/** Derived attributes: number of levels below the directory
 		 *  that contains the corresponding blob attribute. */
 		unsigned depth;
+		/** Addrxlat option attributes: target option index.
+		 */
+		addrxlat_optidx_t optidx;
 	};
 	kdump_attr_type_t type;
 	unsigned override:1;	/**< Set iff this is a template override. */
@@ -527,16 +530,8 @@ struct attr_dict {
 	struct kdump_shared *shared;
 };
 
-/** OS type to attribute key mapping.
- */
-struct ostype_attr_map {
-	addrxlat_ostype_t ostype;   /**< OS type */
-	enum global_keyidx attrkey; /**< Corresponding attribute key */
-};
-
-INTERNAL_DECL(struct attr_data *, ostype_attr,
-	      (const kdump_ctx_t *ctx,
-	       const struct ostype_attr_map *map));
+INTERNAL_DECL(kdump_status, ostype_attr,
+	      (kdump_ctx_t *ctx, const char *name, struct attr_data **attr));
 
 struct cache;
 
@@ -638,7 +633,11 @@ struct kdump_xlat {
 	 */
 	struct list_head ctx;
 
-	addrxlat_ostype_t ostype; /**< OS for address translation. */
+	/** OS attribute base directory.
+	 * If OS type is not set, this field contains @xref NR_GLOBAL_ATTRS,
+	 * which is an invalid value.
+	 */
+	enum global_keyidx osdir;
 	addrxlat_sys_t *xlatsys;  /**< Address translation system. */
 	unsigned long xlat_caps;  /**< Address space capabilities. */
 };

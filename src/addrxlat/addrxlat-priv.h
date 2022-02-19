@@ -393,49 +393,34 @@ INTERNAL_DECL(addrxlat_status, highest_linear,
 
 /* Option parsing. */
 
-/** All options recognized by @ref parse_opts. */
-enum optidx {
-	OPT_levels,		/**< Number of page table levels. */
-	OPT_pagesize,		/**< Page size (number). */
-	OPT_phys_base,		/**< [x86-64] Linux physical base address. */
-	OPT_rootpgt,		/**< Root page table address. */
-	OPT_xen_p2m_mfn,	/**< Xen p2m root machine frame number. */
-	OPT_xen_xlat,		/**< Use Xen m2p and p2m translation. */
-
-	OPT_NUM			/**< Total number of options. */
-};
-
-/** Single option value. */
-union optval {
-	const char *str;	/**< String(-like) values. */
-	long num;		/**< Number(-like) values. */
-	addrxlat_addr_t addr;	/**< Simple address or offset. */
-
-	/** Full address (with address space).*/
-	addrxlat_fulladdr_t fulladdr;
-};
-
 /** This structure holds parsed options. */
 struct parsed_opts {
-	/** Buffer for parsed option values. */
-	char *buf;
-
 	/** Set/unset flag for each option. */
-	bool isset[OPT_NUM];
+	bool isset[ADDRXLAT_OPT_NUM];
 
-	unsigned long levels;		/**< Value of OPT_levels. */
-	unsigned long pagesize;		/**< Value of OPT_pagesize. */
+	const char *arch;		/**< Value of OPT_arch. */
+	const char *os_type;		/**< Value of OPT_os_type. */
+	unsigned long version_code;	/**< Value of OPT_version_code. */
+	unsigned long phys_bits;	/**< Value of OPT_phys_bits. */
+	unsigned long virt_bits;	/**< Value of OPT_virt_bits. */
+	unsigned long page_shift;	/**< Value of OPT_page_shift. */
 	addrxlat_addr_t phys_base;	/**< Value of OPT_phys_base. */
 	addrxlat_fulladdr_t rootpgt;	/**< Value of OPT_rootpgt. */
 	unsigned long xen_p2m_mfn;	/**< Value of OPT_xen_p2m_mfn. */
 	bool xen_xlat;			/**< Value of OPT_xen_xlat. */
 };
 
-INTERNAL_DECL(addrxlat_status, parse_opts,
-	      (struct parsed_opts *popt, addrxlat_ctx_t *ctx,
-	       const char *opts));
+/** Check whether an option is set, using its bare name. */
+#define opt_isset(popt, name)	((popt).isset[ADDRXLAT_OPT_ ## name])
 
 /* Translation system */
+
+/** Operating system type. */
+enum os_type {
+	OS_UNKNOWN,		/**< Unknown OS. */
+	OS_LINUX,		/**< Linux kernel. */
+	OS_XEN,			/**< Xen hypervisor. */
+};
 
 /** Data used during translation system initialization. */
 struct os_init_data {
@@ -445,11 +430,13 @@ struct os_init_data {
 	/** Translation context used for initialization. */
 	addrxlat_ctx_t *ctx;
 
-	/** OS description. */
-	const addrxlat_osdesc_t *osdesc;
-
 	/** Parsed options. */
 	struct parsed_opts popt;
+
+	/** OS type.
+	 * This field is set to @xref OS_UNKNOWN if the OS type
+	 * attribute was not specified or is not understood. */
+	enum os_type os_type;
 };
 
 /** Arch-specific translation system initialization funciton.
@@ -526,10 +513,19 @@ clear_error(addrxlat_ctx_t *ctx)
 }
 
 static inline addrxlat_status
-bad_paging_levels(addrxlat_ctx_t *ctx, long levels)
+bad_phys_bits(addrxlat_ctx_t *ctx, unsigned long bits)
 {
 	return set_error(ctx, ADDRXLAT_ERR_NOTIMPL,
-			 "%ld-level paging not implemented", levels);
+			 "%lu-bit %s addresses not implemented",
+			 bits, "physical");
+}
+
+static inline addrxlat_status
+bad_virt_bits(addrxlat_ctx_t *ctx, unsigned long bits)
+{
+	return set_error(ctx, ADDRXLAT_ERR_NOTIMPL,
+			 "%lu-bit %s addresses not implemented",
+			 bits, "virtual");
 }
 
 #endif	/* addrxlat-priv.h */

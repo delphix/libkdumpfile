@@ -802,50 +802,176 @@ addrxlat_sys_meth_t addrxlat_map_search(
  */
 addrxlat_map_t *addrxlat_map_copy(const addrxlat_map_t *map);
 
-/** Operating system type. */
-typedef enum _addrxlat_ostype {
-	ADDRXLAT_OS_UNKNOWN,	/**< Unknown OS. */
-	ADDRXLAT_OS_LINUX,	/**< Linux kernel. */
-	ADDRXLAT_OS_XEN,	/**< Xen hypervisor. */
-} addrxlat_ostype_t;
-
-/** Description of an operating system.
- * This structure is used to pass some details about the operating system
- * to set up a translation map.
- */
-typedef struct _addrxlat_osdesc {
+/** Option number. */
+typedef enum _addrxlat_optidx {
 	/** Architecture name.
-	 * This member must be set and not @c NULL.
+	 * Type: string
 	 */
-	const char *arch;
+	ADDRXLAT_OPT_arch,
 
 	/** Operating system type.
-	 * If undetermined, use @c ADDRXLAT_OS_UNKNOWN.
+	 * Type: string
 	 */
-	addrxlat_ostype_t type;
+	ADDRXLAT_OPT_os_type,
 
 	/** Operating system version.
-	 * Use zero if uknown.
+	 * Type: number
 	 */
-	unsigned long ver;
+	ADDRXLAT_OPT_version_code,
 
-	/** Further options, e.g. architecture variant.
-	 * This member is optional. If there are no options, you can
-	 * eith set it to an empty string or @c NULL.
+	/** Number of physical address bits.
+	 * Type: number
 	 */
-	const char *opts;
-} addrxlat_osdesc_t;
+	ADDRXLAT_OPT_phys_bits,
+
+	/** Number of virtual address bits.
+	 * Type: number
+	 */
+	ADDRXLAT_OPT_virt_bits,
+
+	/** Page shift.
+	 * Type: number
+	 */
+	ADDRXLAT_OPT_page_shift,
+
+	/** Physical base address.
+	 * Type: address
+	 *
+	 * Either the physical base address of an x86-64 Linux kernel,
+	 * or the physical start address of an x86-64 Xen hypervisor.
+	 */
+	ADDRXLAT_OPT_phys_base,
+
+	/** Root page table address.
+	 * Type: full address
+	 */
+	ADDRXLAT_OPT_rootpgt,
+
+	/** Xen p2m root machine frame number.
+	 * Type: address
+	 */
+	ADDRXLAT_OPT_xen_p2m_mfn,
+
+	/** Force the use of Xen m2p and p2m translation.
+	 * Type: number
+	 */
+	ADDRXLAT_OPT_xen_xlat,
+
+	/** Total number of addrxlat options. */
+	ADDRXLAT_OPT_NUM
+} addrxlat_optidx_t;
+
+/** Single option value. */
+typedef union _addrxlat_optval {
+	/** String(-like) values. */
+	const char *str;
+
+	/** Number(-like) values. */
+	unsigned long num;
+
+	/** Simple address or offset. */
+	addrxlat_addr_t addr;
+
+	/** Full address (with address space).*/
+	addrxlat_fulladdr_t fulladdr;
+} addrxlat_optval_t;
+
+/** Single option. */
+typedef struct _addrxlat_opt {
+	addrxlat_optidx_t idx;	/**< Option index. */
+	addrxlat_optval_t val;	/**< Option value. */
+} addrxlat_opt_t;
+
+/** Helper to set @xref ADDRXLAT_OPT_arch in a type-safe manner. */
+static inline void
+addrxlat_opt_arch(addrxlat_opt_t *opt, const char *val)
+{
+	opt->idx = ADDRXLAT_OPT_arch;
+	opt->val.str = val;
+}
+
+/** Helper to set @xref ADDRXLAT_OPT_os_type in a type-safe manner. */
+static inline void
+addrxlat_opt_os_type(addrxlat_opt_t *opt, const char *val)
+{
+	opt->idx = ADDRXLAT_OPT_os_type;
+	opt->val.str = val;
+}
+
+/** Helper to set @xref ADDRXLAT_OPT_version_code in a type-safe manner. */
+static inline void
+addrxlat_opt_version_code(addrxlat_opt_t *opt, unsigned long val)
+{
+	opt->idx = ADDRXLAT_OPT_version_code;
+	opt->val.num = val;
+}
+
+/** Helper to set @xref ADDRXLAT_OPT_phys_bits in a type-safe manner. */
+static inline void
+addrxlat_opt_phys_bits(addrxlat_opt_t *opt, unsigned long val)
+{
+	opt->idx = ADDRXLAT_OPT_phys_bits;
+	opt->val.num = val;
+}
+
+/** Helper to set @xref ADDRXLAT_OPT_virt_bits in a type-safe manner. */
+static inline void
+addrxlat_opt_virt_bits(addrxlat_opt_t *opt, unsigned long val)
+{
+	opt->idx = ADDRXLAT_OPT_virt_bits;
+	opt->val.num = val;
+}
+
+/** Helper to set @xref ADDRXLAT_OPT_page_shift in a type-safe manner. */
+static inline void
+addrxlat_opt_page_shift(addrxlat_opt_t *opt, unsigned long val)
+{
+	opt->idx = ADDRXLAT_OPT_page_shift;
+	opt->val.num = val;
+}
+
+/** Helper to set @xref ADDRXLAT_OPT_phys_base in a type-safe manner. */
+static inline void
+addrxlat_opt_phys_base(addrxlat_opt_t *opt, addrxlat_addr_t val)
+{
+	opt->idx = ADDRXLAT_OPT_phys_base;
+	opt->val.addr = val;
+}
+
+/** Helper to set @xref ADDRXLAT_OPT_rootpgt in a type-safe manner. */
+static inline void
+addrxlat_opt_rootpgt(addrxlat_opt_t *opt, const addrxlat_fulladdr_t *val)
+{
+	opt->idx = ADDRXLAT_OPT_rootpgt;
+	opt->val.fulladdr = *val;
+}
+
+/** Helper to set @xref ADDRXLAT_OPT_xen_p2m_mfn in a type-safe manner. */
+static inline void
+addrxlat_opt_xen_p2m_mfn(addrxlat_opt_t *opt, unsigned long val)
+{
+	opt->idx = ADDRXLAT_OPT_xen_p2m_mfn;
+	opt->val.num = val;
+}
+
+/** Helper to set @xref ADDRXLAT_OPT_xen_xlat in a type-safe manner. */
+static inline void
+addrxlat_opt_xen_xlat(addrxlat_opt_t *opt, unsigned long val)
+{
+	opt->idx = ADDRXLAT_OPT_xen_xlat;
+	opt->val.num = val;
+}
 
 /** Linux kernel version code.
  * This macro can be used to convert a three-part Linux kernel version
- * to a single number for use as @c ver in @ref addrxlat_osdesc_t.
+ * to a single number for use as @xref ADDRXLAT_OPT_version_code.
  */
 #define ADDRXLAT_VER_LINUX(a,b,c)	\
 	(((a) << 16) + ((b) << 8) + (c))
 
 /** Xen version code.
  * This macro can be used to convert a Xen major/minor version pair
- * to a single number for use as @c ver in @ref addrxlat_osdesc_t.
+ * to a single number for use as @xref ADDRXLAT_OPT_version_code.
  */
 #define ADDRXLAT_VER_XEN(major,minor)	\
 	(((major) << 16) | (minor))
@@ -881,7 +1007,8 @@ unsigned long addrxlat_sys_decref(addrxlat_sys_t *sys);
 /** Set up a translation system for a pre-defined operating system.
  * @param sys     Translation sytem.
  * @param ctx     Address translation context.
- * @param osdesc  Description of the operating system.
+ * @param optc    Number of options.
+ * @param opts    Additional options (ignored if @p optc is zero).
  * @returns       Error status.
  *
  * This function uses OS-specific data and built-in heuristics to
@@ -890,7 +1017,7 @@ unsigned long addrxlat_sys_decref(addrxlat_sys_t *sys);
  */
 addrxlat_status addrxlat_sys_os_init(
 	addrxlat_sys_t *sys, addrxlat_ctx_t *ctx,
-	const addrxlat_osdesc_t *osdesc);
+	unsigned optc, const addrxlat_opt_t *opts);
 
 /** Translation system map index.
  *

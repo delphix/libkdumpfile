@@ -26,11 +26,15 @@
    not, see <http://www.gnu.org/licenses/>.
 */
 
+#define _GNU_SOURCE
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <endian.h>
 #include <ctype.h>
+#include <limits.h>
+
 #include <libkdumpfile/addrxlat.h>
 
 #include "testutil.h"
@@ -164,19 +168,33 @@ get_symdata(void *data, addrxlat_sym_t *sym)
 	return ADDRXLAT_ERR_NODATA;
 }
 
-static unsigned long long ostype;
-static unsigned long long osver;
 static char *arch;
-static char *opts;
+static char *ostype;
+static unsigned long long osver;
+static unsigned long long phys_bits;
+static unsigned long long virt_bits;
+static unsigned long long page_shift;
+static unsigned long long phys_base;
+static addrxlat_fulladdr_t rootpgt;
+static unsigned long long xen_p2m_mfn;
+static bool xen_xlat;
 
 static char *sym_file;
 static char *data_file;
 
 static const struct param param_array[] = {
-	PARAM_NUMBER("ostype", ostype),
-	PARAM_NUMBER("osver", osver),
+	/* addrxlat options */
 	PARAM_STRING("arch", arch),
-	PARAM_STRING("opts", opts),
+	PARAM_STRING("ostype", ostype),
+	PARAM_NUMBER("osver", osver),
+	PARAM_NUMBER("phys_bits", phys_bits),
+	PARAM_NUMBER("virt_bits", virt_bits),
+	PARAM_NUMBER("page_shift", page_shift),
+	PARAM_NUMBER("phys_base", phys_base),
+	PARAM_FULLADDR("rootpgt", rootpgt),
+	PARAM_NUMBER("xen_p2m_mfn", xen_p2m_mfn),
+	PARAM_YESNO("xen_xlat", xen_xlat),
+
 	PARAM_NUMBER("data_as", entry_as),
 
 	PARAM_STRING("SYM", sym_file),
@@ -187,6 +205,77 @@ static const struct params params = {
 	ARRAY_SIZE(param_array),
 	param_array
 };
+
+static void clear_params(void)
+{
+	arch = NULL;
+	ostype = NULL;
+	osver = ULLONG_MAX;
+	phys_bits = ULLONG_MAX;
+	virt_bits = ULLONG_MAX;
+	page_shift = ULLONG_MAX;
+	phys_base = ULLONG_MAX;
+	rootpgt.as = ADDRXLAT_NOADDR;
+	xen_p2m_mfn = ULLONG_MAX;
+	xen_xlat = false;
+}
+
+static unsigned make_opts(addrxlat_opt_t *opts)
+{
+	addrxlat_opt_t *opt = opts;
+
+	if (arch) {
+		addrxlat_opt_arch(opt, arch);
+		++opt;
+	}
+
+	if (ostype) {
+		addrxlat_opt_os_type(opt, ostype);
+		++opt;
+	}
+
+	if (osver != ULLONG_MAX) {
+		addrxlat_opt_version_code(opt, osver);
+		++opt;
+	}
+
+	if (phys_bits != ULLONG_MAX) {
+		addrxlat_opt_phys_bits(opt, phys_bits);
+		++opt;
+	}
+
+	if (virt_bits != ULLONG_MAX) {
+		addrxlat_opt_virt_bits(opt, virt_bits);
+		++opt;
+	}
+
+	if (page_shift != ULLONG_MAX) {
+		addrxlat_opt_page_shift(opt, page_shift);
+		++opt;
+	}
+
+	if (phys_base != ULLONG_MAX) {
+		addrxlat_opt_phys_base(opt, phys_base);
+		++opt;
+	}
+
+	if (rootpgt.as != ADDRXLAT_NOADDR) {
+		addrxlat_opt_rootpgt(opt, &rootpgt);
+		++opt;
+	}
+
+	if (xen_p2m_mfn != ULLONG_MAX) {
+		addrxlat_opt_xen_p2m_mfn(opt, xen_p2m_mfn);
+		++opt;
+	}
+
+	if (xen_xlat) {
+		addrxlat_opt_xen_xlat(opt, 1);
+		++opt;
+	}
+
+	return opt - opts;
+}
 
 static void
 print_target_as(const addrxlat_meth_t *meth)
@@ -373,13 +462,8 @@ os_map(void)
 		.read_caps = ADDRXLAT_CAPS(entry_as),
 		.sym = get_symdata
 	};
-	addrxlat_osdesc_t meth;
+	addrxlat_opt_t opts[ADDRXLAT_OPT_NUM];
 	addrxlat_status status;
-
-	meth.type = ostype;
-	meth.ver = osver;
-	meth.arch = arch;
-	meth.opts = opts;
 
 	data.ctx = addrxlat_ctx_new();
 	if (!data.ctx) {
@@ -395,7 +479,9 @@ os_map(void)
 		return TEST_ERR;
 	}
 
-	status = addrxlat_sys_os_init(data.sys, data.ctx, &meth);
+	status = addrxlat_sys_os_init(data.sys, data.ctx,
+				      make_opts(opts), opts);
+
 	if (status != ADDRXLAT_OK) {
 		fprintf(stderr, "OS map failed: %s\n",
 			addrxlat_ctx_get_err(data.ctx));
@@ -620,6 +706,7 @@ main(int argc, char **argv)
 	} else
 		param = stdin;
 
+	clear_params();
 	rc = parse_params_file(&params, param);
 	if (param != stdin)
 		fclose(param);

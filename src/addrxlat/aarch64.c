@@ -219,8 +219,8 @@ linux_page_offset(struct os_init_data *ctl, unsigned va_bits,
 	} else if (status == ADDRXLAT_ERR_NODATA) {
 		/* Fall back to checking kernel version number. */
 		clear_error(ctl->ctx);
-		if (ctl->osdesc->ver) {
-			*off = (ctl->osdesc->ver >= KERNEL_VERSION(5, 4, 0))
+		if (opt_isset(ctl->popt, version_code)) {
+			*off = (ctl->popt.version_code >= KERNEL_VERSION(5, 4, 0))
 				? top
 				: half;
 			status = ADDRXLAT_OK;
@@ -303,18 +303,12 @@ init_pgt_meth(struct os_init_data *ctl, unsigned va_bits)
 	pgt->pte_mask = 0;
 	pgt->pf.pte_format = ADDRXLAT_PTE_AARCH64;
 
-	if (!ctl->popt.isset[OPT_pagesize])
+	if (!opt_isset(ctl->popt, page_shift))
 		return set_error(ctl->ctx, ADDRXLAT_ERR_NODATA,
 				 "Cannot determine page size");
-	page_bits = ffsl(ctl->popt.pagesize) - 1;
+	page_bits = ctl->popt.page_shift;
 
-	if (ctl->popt.isset[OPT_levels]) {
-		long levels = ctl->popt.levels;
-		if (levels < 3 || levels > 5)
-			return bad_paging_levels(ctl->ctx, levels);
-		pgt->pf.nfields = levels + 1;
-	} else
-		pgt->pf.nfields = (va_bits - 4) / (page_bits - 3) + 1;
+	pgt->pf.nfields = (va_bits - 4) / (page_bits - 3) + 1;
 
 	field_bits = page_bits;
 	for (i = 0; i < pgt->pf.nfields; ++i) {
@@ -352,16 +346,20 @@ map_linux_aarch64(struct os_init_data *ctl)
 	addrxlat_status status;
 	addrxlat_addr_t va_bits;
 
-	status = get_number(ctl->ctx, "TCR_EL1_T1SZ", &va_bits);
-	if (status == ADDRXLAT_OK) {
-		va_bits = 64 - va_bits;
-	} else if (status == ADDRXLAT_ERR_NODATA) {
-		clear_error(ctl->ctx);
-		status = get_number(ctl->ctx, "VA_BITS", &va_bits);
+	if (opt_isset(ctl->popt, virt_bits)) {
+		va_bits = ctl->popt.virt_bits;
+	} else {
+		status = get_number(ctl->ctx, "TCR_EL1_T1SZ", &va_bits);
+		if (status == ADDRXLAT_OK) {
+			va_bits = 64 - va_bits;
+		} else if (status == ADDRXLAT_ERR_NODATA) {
+			clear_error(ctl->ctx);
+			status = get_number(ctl->ctx, "VA_BITS", &va_bits);
+		}
+		if (status != ADDRXLAT_OK)
+			return set_error(ctl->ctx, status,
+					 "Cannot determine VA_BITS");
 	}
-	if (status != ADDRXLAT_OK)
-		return set_error(ctl->ctx, status,
-				 "Cannot determine VA_BITS");
 
 	status = init_pgt_meth(ctl, va_bits);
 	if (status != ADDRXLAT_OK)
@@ -369,7 +367,7 @@ map_linux_aarch64(struct os_init_data *ctl)
 
 	meth = &ctl->sys->meth[ADDRXLAT_SYS_METH_PGT];
 	*meth = ctl->sys->meth[ADDRXLAT_SYS_METH_UPGT];
-	if (ctl->popt.isset[OPT_rootpgt])
+	if (opt_isset(ctl->popt, rootpgt))
 		meth->param.pgt.root = ctl->popt.rootpgt;
 	else {
 		status = get_linux_pgtroot(ctl, &meth->param.pgt.root);
@@ -410,12 +408,9 @@ map_linux_aarch64(struct os_init_data *ctl)
 addrxlat_status
 sys_aarch64(struct os_init_data *ctl)
 {
-	switch (ctl->osdesc->type) {
-	case ADDRXLAT_OS_LINUX:
+	if (ctl->os_type == OS_LINUX)
 		return map_linux_aarch64(ctl);
 
-	default:
-		return set_error(ctl->ctx, ADDRXLAT_ERR_NOTIMPL,
-				 "OS type not implemented");
-	}
+	return set_error(ctl->ctx, ADDRXLAT_ERR_NOTIMPL,
+			 "OS type not implemented");
 }

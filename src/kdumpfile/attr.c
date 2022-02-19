@@ -1400,19 +1400,34 @@ kdump_attr_iter_end(kdump_ctx_t *ctx, kdump_attr_iter_t *iter)
 }
 
 /**  Use a map to choose an attribute by current OS type.
- * @param ctx     Dump file object.
- * @param map     OS type -> global attribute index.
- * @returns       Attribute, or @c NULL if OS type not found.
+ * @param      ctx   Dump file object.
+ * @param[in]  name  Attribute name under the OS directory.
+ * @param[out] attr  Attribute data (set on success).
+ * @returns          Error status.
  */
-struct attr_data *
-ostype_attr(const kdump_ctx_t *ctx,
-	    const struct ostype_attr_map *map)
+kdump_status
+ostype_attr(kdump_ctx_t *ctx, const char *name, struct attr_data **attr)
 {
-	while (map->ostype != ADDRXLAT_OS_UNKNOWN) {
-		if (map->ostype == ctx->xlat->ostype)
-			return dgattr(ctx->dict, map->attrkey);
-		++map;
-	}
+	struct attr_data *d;
+	const char *ostype;
+	kdump_status status;
 
-	return NULL;
+	/* Get OS directory attribute */
+	if (ctx->xlat->osdir == NR_GLOBAL_ATTRS)
+		return set_error(ctx, KDUMP_ERR_NODATA,
+				 "OS type is not set");
+	d = gattr(ctx, ctx->xlat->osdir);
+
+	/* Get attribute under the OS directory. */
+	d = lookup_dir_attr(ctx->dict, d, name, strlen(name));
+	if (!d || !attr_isset(d))
+		return set_error(ctx, KDUMP_ERR_NODATA,
+				 "%s.%s is not set", ostype, name);
+	status = attr_revalidate(ctx, d);
+	if (status != KDUMP_OK)
+		return set_error(ctx, status,
+				 "Cannot get %s.%s", ostype, name);
+
+	*attr = d;
+	return KDUMP_OK;
 }

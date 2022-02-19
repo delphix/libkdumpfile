@@ -5,9 +5,10 @@
 # and 64k pages. No explicit version.
 #
 
-arch=aarch64
-ostype=1
-osver=0
-opts="pagesize=65536"
+opts=(
+    arch=aarch64
+    ostype=linux
+    page_shift=16
+)
 
 . "$srcdir"/xlat-os-common

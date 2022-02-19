@@ -326,8 +326,9 @@ linux_directmap(struct os_init_data *ctl)
 	addrxlat_status status;
 
 	status = linux_directmap_by_pgt(&layout[0], ctl->sys, ctl->ctx);
-	if (status != ADDRXLAT_OK && ctl->osdesc->ver)
-		status = linux_directmap_by_ver(&layout[0], ctl->osdesc->ver);
+	if (status != ADDRXLAT_OK && opt_isset(ctl->popt, version_code))
+		status = linux_directmap_by_ver(&layout[0],
+						ctl->popt.version_code);
 	remove_rdirect(ctl->sys);
 	if (status == ADDRXLAT_OK) {
 		layout[0].meth = ADDRXLAT_SYS_METH_DIRECT;
@@ -471,7 +472,7 @@ linux_ktext_meth(struct os_init_data *ctl)
 	addrxlat_addr_t stext;
 	addrxlat_status status;
 
-	if (ctl->popt.isset[OPT_phys_base]) {
+	if (opt_isset(ctl->popt, phys_base)) {
 		set_ktext_offset(ctl->sys, (ctl->popt.phys_base -
 					    LINUX_KTEXT_START));
 		return ADDRXLAT_OK;
@@ -647,7 +648,7 @@ set_xen_p2m(struct os_init_data *ctl)
 
 	map = ctl->sys->map[ADDRXLAT_SYS_MAP_KPHYS_MACHPHYS];
 	map_clear(map);
-	if (!ctl->popt.isset[OPT_xen_p2m_mfn])
+	if (!opt_isset(ctl->popt, xen_p2m_mfn))
 		return ADDRXLAT_OK; /* leave undefined */
 	p2m_maddr = ctl->popt.xen_p2m_mfn << PAGE_SHIFT;
 
@@ -701,7 +702,7 @@ map_linux_x86_64(struct os_init_data *ctl)
 		return status;
 
 	/* Take care of machine physical <-> kernel physical mapping. */
-	if (ctl->popt.isset[OPT_xen_xlat] &&
+	if (opt_isset(ctl->popt, xen_xlat) &&
 	    ctl->popt.xen_xlat) {
 		status = set_xen_p2m(ctl);
 		if (status != ADDRXLAT_OK)
@@ -826,7 +827,7 @@ setup_xen_pgt(struct os_init_data *ctl)
 	pgt = meth->param.pgt.root.addr;
 	if (pgt >= XEN_DIRECTMAP) {
 		off = -XEN_DIRECTMAP;
-	} else if (ctl->popt.isset[OPT_phys_base]) {
+	} else if (opt_isset(ctl->popt, phys_base)) {
 		addrxlat_addr_t xen_virt_start = pgt & ~(XEN_TEXT_SIZE - 1);
 		off = ctl->popt.phys_base - xen_virt_start;
 	} else
@@ -893,20 +894,21 @@ map_xen_x86_64(struct os_init_data *ctl)
 		layout[0].last =
 			XEN_DIRECTMAP_BIGMEM + XEN_DIRECTMAP_SIZE_3_5T - 1;
 		layout[1].first = XEN_TEXT_4_4;
-	} else if (ctl->osdesc->ver >= ADDRXLAT_VER_XEN(4, 0)) {
+	} else if (opt_isset(ctl->popt, version_code) &&
+		   ctl->popt.version_code >= ADDRXLAT_VER_XEN(4, 0)) {
 		/* !BIGMEM is assumed for Xen 4.6+. Can we do better? */
 
-		if (ctl->osdesc->ver >= ADDRXLAT_VER_XEN(4, 4))
+		if (ctl->popt.version_code >= ADDRXLAT_VER_XEN(4, 4))
 			layout[1].first = XEN_TEXT_4_4;
-		else if (ctl->osdesc->ver >= ADDRXLAT_VER_XEN(4, 3))
+		else if (ctl->popt.version_code >= ADDRXLAT_VER_XEN(4, 3))
 			layout[1].first = XEN_TEXT_4_3;
 		else
 			layout[1].first = XEN_TEXT_4_0;
-	} else if (ctl->osdesc->ver) {
+	} else if (opt_isset(ctl->popt, version_code)) {
 		layout[0].last =
 			XEN_DIRECTMAP + XEN_DIRECTMAP_SIZE_1T - 1;
 
-		if (ctl->osdesc->ver >= ADDRXLAT_VER_XEN(3, 2))
+		if (ctl->popt.version_code >= ADDRXLAT_VER_XEN(3, 2))
 			layout[1].first = XEN_TEXT_3_2;
 		else
 			/* Prior to Xen 3.2, text was in direct mapping. */
@@ -968,14 +970,14 @@ init_pgt_meth(struct os_init_data *ctl)
 	meth = &ctl->sys->meth[ADDRXLAT_SYS_METH_PGT];
 	meth->kind = ADDRXLAT_PGT;
 	meth->target_as = ADDRXLAT_MACHPHYSADDR;
-	if (ctl->popt.isset[OPT_rootpgt])
+	if (opt_isset(ctl->popt, rootpgt))
 		meth->param.pgt.root = ctl->popt.rootpgt;
 	else
 		meth->param.pgt.root.as = ADDRXLAT_NOADDR;
 	meth->param.pgt.pte_mask = 0;
 	meth->param.pgt.pf = x86_64_pf;
 
-	if (ctl->osdesc->type == ADDRXLAT_OS_LINUX) {
+	if (ctl->os_type == OS_LINUX) {
 		addrxlat_addr_t l5_enabled;
 
 		status = get_number(ctl->ctx, "pgtable_l5_enabled",
@@ -1025,14 +1027,11 @@ sys_x86_64(struct os_init_data *ctl)
 	if (status != ADDRXLAT_OK)
 		return status;
 
-	switch (ctl->osdesc->type) {
-	case ADDRXLAT_OS_LINUX:
+	if (ctl->os_type == OS_LINUX)
 		return map_linux_x86_64(ctl);
 
-	case ADDRXLAT_OS_XEN:
+	if (ctl->os_type == OS_XEN)
 		return map_xen_x86_64(ctl);
 
-	default:
-		return ADDRXLAT_OK;
-	}
+	return ADDRXLAT_OK;
 }

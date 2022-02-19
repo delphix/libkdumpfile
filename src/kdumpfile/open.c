@@ -268,11 +268,11 @@ static kdump_status
 ostype_pre_hook(kdump_ctx_t *ctx, struct attr_data *attr,
 		kdump_attr_value_t *val)
 {
-	if (!(strcmp(val->string, "linux")))
-		ctx->xlat->ostype = ADDRXLAT_OS_LINUX;
-	else if (!strcmp(val->string, "xen"))
-		ctx->xlat->ostype = ADDRXLAT_OS_XEN;
-	else
+	if (!(strcmp(val->string, "linux"))) {
+		ctx->xlat->osdir = GKI_dir_linux;
+	} else if (!strcmp(val->string, "xen")) {
+		ctx->xlat->osdir = GKI_dir_linux;
+	} else
 		return set_error(ctx, KDUMP_ERR_NOTIMPL,
 				 "Unsupported OS type");
 
@@ -292,13 +292,13 @@ ostype_post_hook(kdump_ctx_t *ctx, struct attr_data *attr)
 			return status;
 	}
 
-	switch (ctx->xlat->ostype) {
-	case ADDRXLAT_OS_LINUX:
+	switch (ctx->xlat->osdir) {
+	case GKI_dir_linux:
 		status = update_linux_utsname(ctx);
 		if (status != KDUMP_OK)
 			return status;
 		/* fall through */
-	case ADDRXLAT_OS_XEN:
+	case GKI_dir_xen:
 		status = update_xen_extra_ver(ctx);
 		if (status != KDUMP_OK)
 			return status;
@@ -314,7 +314,7 @@ ostype_post_hook(kdump_ctx_t *ctx, struct attr_data *attr)
 static void
 ostype_clear_hook(kdump_ctx_t *ctx, struct attr_data *attr)
 {
-	ctx->xlat->ostype = ADDRXLAT_OS_UNKNOWN;
+	ctx->xlat->osdir = NR_GLOBAL_ATTRS;
 	ctx->xlat->dirty = true;
 }
 

@@ -5,9 +5,11 @@
 # using data from VMCOREINFO.
 #
 
-arch=aarch64
-ostype=1
-osver=0x050200
-opts="pagesize=4096"
+opts=(
+    arch=aarch64
+    ostype=linux
+    osver=0x050200
+    page_shift=12
+)
 
 . "$srcdir"/xlat-os-common
