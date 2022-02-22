@@ -1308,6 +1308,26 @@ kdump_attr_ref_set(kdump_ctx_t *ctx, kdump_attr_ref_t *ref,
 	return ret;
 }
 
+kdump_status
+kdump_set_sub_attr(kdump_ctx_t *ctx, const kdump_attr_ref_t *base,
+		   const char *subkey, const kdump_attr_t *valp)
+{
+	struct attr_data *dir, *attr;
+	kdump_status ret;
+
+	clear_error(ctx);
+	dir = ref_attr(base);
+	rwlock_wrlock(&ctx->shared->lock);
+
+	attr = lookup_dir_attr(ctx->dict, dir, subkey, strlen(subkey));
+	ret = attr
+		? check_set_attr(ctx, attr, valp)
+		: set_error(ctx, KDUMP_ERR_NOKEY, "No such key");
+
+	rwlock_unlock(&ctx->shared->lock);
+	return ret;
+}
+
 static kdump_status
 set_iter_pos(kdump_attr_iter_t *iter, struct attr_data *attr)
 {
@@ -1408,8 +1428,7 @@ kdump_attr_iter_end(kdump_ctx_t *ctx, kdump_attr_iter_t *iter)
 kdump_status
 ostype_attr(kdump_ctx_t *ctx, const char *name, struct attr_data **attr)
 {
-	struct attr_data *d;
-	const char *ostype;
+	struct attr_data *d, *a;
 	kdump_status status;
 
 	/* Get OS directory attribute */
@@ -1419,15 +1438,17 @@ ostype_attr(kdump_ctx_t *ctx, const char *name, struct attr_data **attr)
 	d = gattr(ctx, ctx->xlat->osdir);
 
 	/* Get attribute under the OS directory. */
-	d = lookup_dir_attr(ctx->dict, d, name, strlen(name));
-	if (!d || !attr_isset(d))
+	a = lookup_dir_attr(ctx->dict, d, name, strlen(name));
+	if (!a || !attr_isset(a))
 		return set_error(ctx, KDUMP_ERR_NODATA,
-				 "%s.%s is not set", ostype, name);
-	status = attr_revalidate(ctx, d);
+				 "%s.%s is not set",
+				 d->template->key, name);
+	status = attr_revalidate(ctx, a);
 	if (status != KDUMP_OK)
 		return set_error(ctx, status,
-				 "Cannot get %s.%s", ostype, name);
+				 "Cannot get %s.%s",
+				 d->template->key, name);
 
-	*attr = d;
+	*attr = a;
 	return KDUMP_OK;
 }
