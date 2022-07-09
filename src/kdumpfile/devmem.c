@@ -243,7 +243,7 @@ devmem_get_page(kdump_ctx_t *ctx, struct page_io *pio)
 	ce->key = pio->addr.addr;
 	mutex_lock(&ctx->shared->cache_lock);
 	ret = fcache_get_chunk(ctx->shared->fcache, &pio->chunk,
-			       get_page_size(ctx), pio->addr.addr);
+			       get_page_size(ctx), 0, pio->addr.addr);
 	mutex_unlock(&ctx->shared->cache_lock);
 	if (ret != KDUMP_OK) {
 		--ce->refcnt;
@@ -301,7 +301,7 @@ devmem_probe(kdump_ctx_t *ctx)
 	struct stat st;
 	kdump_status ret;
 
-	if (fstat(get_file_fd(ctx), &st))
+	if (fstat(fcache_fd(ctx->shared->fcache, 0), &st))
 		return set_error(ctx, KDUMP_ERR_SYSTEM, "Cannot stat file");
 
 	if (!S_ISCHR(st.st_mode) ||
@@ -322,6 +322,10 @@ devmem_probe(kdump_ctx_t *ctx)
 #else
 	set_byte_order(ctx, KDUMP_BIG_ENDIAN);
 #endif
+
+	if (get_num_files(ctx) > 1)
+		return set_error(ctx, KDUMP_ERR_NOTIMPL,
+				 "Multiple files not implemented");
 
 	ret = set_page_size(ctx, sysconf(_SC_PAGESIZE));
 	if (ret != KDUMP_OK)

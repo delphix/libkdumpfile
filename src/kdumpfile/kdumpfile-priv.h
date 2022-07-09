@@ -434,6 +434,8 @@ struct attr_template {
 		/** Addrxlat option attributes: target option index.
 		 */
 		addrxlat_optidx_t optidx;
+		/** File set attributes: index inside file.fdset.*/
+		size_t fidx;
 	};
 	kdump_attr_type_t type;
 	unsigned override:1;	/**< Set iff this is a template override. */
@@ -533,6 +535,8 @@ struct attr_dict {
 INTERNAL_DECL(kdump_status, ostype_attr,
 	      (kdump_ctx_t *ctx, const char *name, struct attr_data **attr));
 
+DECLARE_ALIAS(open_fdset);
+
 struct cache;
 
 /** Number of per-context data slots.
@@ -566,6 +570,7 @@ struct kdump_shared {
 	enum kdump_arch arch;	/**< Internal-only arch index. */
 	int arch_init_done;	/**< Non-zero if arch init has been called. */
 
+	size_t pendfiles;	/**< Number of unspecified files. */
 	struct cache *cache;	/**< Page cache. */
 	struct fcache *fcache;	/**< File cache. */
 	mutex_t cache_lock;	/**< Cache access lock. */
@@ -1036,6 +1041,12 @@ attr_value(const struct attr_data *attr)
 	return attr->flags.indirect ? attr->pval : &attr->val;
 }
 
+static inline kdump_attr_value_t *
+attr_mut_value(struct attr_data *attr)
+{
+	return attr->flags.indirect ? attr->pval : &attr->val;
+}
+
 /**  Make sure that attribute value is embedded (not indirect).
  * @param attr  Attribute data.
  *
@@ -1064,8 +1075,6 @@ attr_revalidate(kdump_ctx_t *ctx, struct attr_data *attr)
 		: KDUMP_OK;
 }
 
-INTERNAL_DECL(kdump_status, attr_revalidate,
-	      (kdump_ctx_t *ctx, struct attr_data *attr));
 INTERNAL_DECL(kdump_status, set_attr,
 	      (kdump_ctx_t *ctx, struct attr_data *attr,
 	       struct attr_flags flags, kdump_attr_value_t *pval));
@@ -1138,6 +1147,7 @@ INTERNAL_DECL(struct attr_data *, clone_attr_path,
 
 /* Attribute ops */
 INTERNAL_DECL(extern const struct attr_ops, file_fd_ops, );
+INTERNAL_DECL(extern const struct attr_ops, num_files_ops, );
 INTERNAL_DECL(extern const struct attr_ops, page_size_ops, );
 INTERNAL_DECL(extern const struct attr_ops, page_shift_ops, );
 INTERNAL_DECL(extern const struct attr_ops, cache_size_ops, );
@@ -1273,14 +1283,29 @@ struct fcache_entry {
 	struct cache *cache;
 };
 
+/** Information about an open file in a file cache.
+ */
+struct fcache_fileinfo {
+	/** Open file descriptor. */
+	int fd;
+
+	/** File size (if known) or maximum off_t. */
+	off_t filesz;
+};
+
 /** File cache.
+ *
+ * This file cache uses one memory cache to access data from multiple
+ * files. These files are denoted by an array of open file descriptors
+ * (see @ref fcache_new), and later referenced by an index into that
+ * array. This file index is stored in the low bits of the cache key,
+ * which are normally zero, because cache entries are aligned to a page
+ * boundary. As a consequence, the number of files is limited to (host)
+ * page size in bytes.
  */
 struct fcache {
 	/** Reference counter. */
 	unsigned long refcnt;
-
-	/** Open file descriptor. */
-	int fd;
 
 	/** Policy for using mmap(2) vs. read(2).
 	 * @sa kdump_mmap_policy_t
@@ -1293,18 +1318,18 @@ struct fcache {
 	/** Size of mmap'ed regions. */
 	size_t mmapsz;
 
-	/** File size (if known) or maximum off_t. */
-	off_t filesz;
-
 	/** Main cache (for mmap'ed regions). */
 	struct cache *cache;
 
 	/** Fallback cache (for read regions). */
 	struct cache *fbcache;
+
+	/** Information about the files. */
+	struct fcache_fileinfo info[];
 };
 
 INTERNAL_DECL(struct fcache *, fcache_new,
-	      (int fd, unsigned n, unsigned order));
+	      (unsigned nfds, const int *fd, unsigned n, unsigned order));
 INTERNAL_DECL(void, fcache_free,
 	      (struct fcache *fc));
 
@@ -1335,11 +1360,24 @@ fcache_decref(struct fcache *fc)
 	return 0;
 }
 
+/** Get the file descriptor of an underlying open file.
+ * @param fc    File cache.
+ * @param fidx  File index.
+ * @returns     File descriptor of the referenced file.
+ */
+static inline int
+fcache_fd(struct fcache *fc, int fidx)
+{
+	return fc->info[fidx].fd;
+}
+
 INTERNAL_DECL(kdump_status, fcache_get,
-	      (struct fcache *fc, struct fcache_entry *fce, off_t pos));
+	      (struct fcache *fc, struct fcache_entry *fce,
+	       unsigned fidx, off_t pos));
 
 INTERNAL_DECL(kdump_status, fcache_get_fb,
-	      (struct fcache *fc, struct fcache_entry *fce, off_t pos,
+	      (struct fcache *fc, struct fcache_entry *fce,
+	       unsigned fidx, off_t pos,
 	       void *fb, size_t sz));
 
 static inline void
@@ -1351,7 +1389,8 @@ fcache_put(struct fcache_entry *fce)
 }
 
 INTERNAL_DECL(kdump_status, fcache_pread,
-	      (struct fcache *fc, void *buf, size_t len, off_t pos));
+	      (struct fcache *fc, void *buf, size_t len,
+	       unsigned fidx, off_t pos));
 
 /** Number of file cache entries embedded in a chunk descriptor. */
 #define MAX_EMBED_FCES	2
@@ -1376,7 +1415,7 @@ struct fcache_chunk {
 
 INTERNAL_DECL(kdump_status, fcache_get_chunk,
 	      (struct fcache *fc, struct fcache_chunk *fch,
-	       size_t len, off_t pos));
+	       size_t len, unsigned fidx, off_t pos));
 INTERNAL_DECL(void, fcache_put_chunk, (struct fcache_chunk *fch));
 
 /**  Page I/O information.

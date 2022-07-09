@@ -32,6 +32,7 @@
 
 #include "kdumpfile-priv.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -56,7 +57,8 @@
  */
 #define FCACHE_ORDER	10
 
-static kdump_status kdump_open_known(kdump_ctx_t *pctx);
+static kdump_status open_dump(kdump_ctx_t *ctx);
+static kdump_status finish_open_dump(kdump_ctx_t *ctx);
 
 static const struct format_ops *formats[] = {
 	&elfdump_ops,
@@ -71,14 +73,193 @@ static const struct format_ops *formats[] = {
 	&devmem_ops
 };
 
+/**  Open the dump if all file descriptors have been specified.
+ * @param ctx  Dump file object.
+ */
+static inline kdump_status
+maybe_open_dump(kdump_ctx_t *ctx)
+{
+	return get_num_files(ctx) && !ctx->shared->pendfiles
+		? open_dump(ctx)
+		: KDUMP_OK;
+}
+
+/**  Set a file descriptor.
+ * @param ctx   Dump file object.
+ * @param attr  File descriptor attribute data.
+ * @param val   New attribute value.
+ * @returns     Error status.
+ *
+ * Adjust number of pending dump files if appropriate.
+ */
+static kdump_status
+fdset_pre_hook(kdump_ctx_t *ctx, struct attr_data *attr,
+	       kdump_attr_value_t *val)
+{
+	if (!attr_isset(attr))
+		--ctx->shared->pendfiles;
+	return KDUMP_OK;
+}
+
+/**  Unset a file descriptor.
+ * @param ctx   Dump file object.
+ * @param attr  File descriptor attribute data.
+ */
+static void
+fdset_clear_hook(kdump_ctx_t *ctx, struct attr_data *attr)
+{
+	if (attr_isset(attr))
+		++ctx->shared->pendfiles;
+
+	if (attr->template->fidx == 0)
+		clear_attr(ctx, gattr(ctx, GKI_file_fd));
+}
+
+/**  Maybe open the dump after setting a file descriptor.
+ * @param ctx   Dump file object.
+ * @param attr  File descriptor attribute data.
+ * @returns     Error status.
+ *
+ * If no more files are pending, open the dump.
+ */
+static kdump_status
+fdset_post_hook(kdump_ctx_t *ctx, struct attr_data *attr)
+{
+	if (attr->template->fidx == 0) {
+		kdump_status status =
+			set_attr(ctx, gattr(ctx, GKI_file_fd),
+				 ATTR_PERSIST, attr_mut_value(attr));
+		if (status != KDUMP_OK)
+			return status;
+	}
+
+	if (!get_num_files(ctx) || ctx->shared->pendfiles)
+		return KDUMP_OK;
+
+	return maybe_open_dump(ctx);
+}
+
+static const struct attr_ops fdset_ops = {
+	.pre_set = fdset_pre_hook,
+	.pre_clear = fdset_clear_hook,
+	.post_set = fdset_post_hook,
+};
+
+/**  Set number of dump files.
+ * @param ctx   Dump file object.
+ * @param attr  Attribute data to be changed.
+ * @param val   New attribute value.
+ * @returns     Error status.
+ *
+ * Set up attributes for a set of dump files.
+ */
+static kdump_status
+num_files_pre_hook(kdump_ctx_t *ctx, struct attr_data *attr,
+		   kdump_attr_value_t *val)
+{
+	struct attr_template tmpl = {
+		.type = KDUMP_NUMBER,
+		.ops = &fdset_ops,
+	};
+
+	struct attr_data *parent = attr->parent;
+	char fdkey[21];
+	size_t keylen;
+	size_t n, i;
+	kdump_status ret;
+
+	/* Check that the new value fits into a size_t. */
+	n = val->number;
+	if (n != val->number)
+		return set_error(ctx, KDUMP_ERR_INVALID, "Number too big");
+
+	/* Allocate new attributes */
+	ret = KDUMP_OK;
+	for (i = attr_value(attr)->number; i < n; ++i) {
+		struct attr_data *child;
+
+		tmpl.fidx = i;
+		keylen = sprintf(fdkey, "%zd", i);
+		child = create_attr_path(ctx->dict, parent,
+					 fdkey, keylen, &tmpl);
+		if (!child) {
+			ret = set_error(ctx, KDUMP_ERR_SYSTEM,
+					"Cannot allocate fdset attributes");
+			n = attr_value(attr)->number;
+			break;
+		}
+		if (i == 0) {
+			child->flags.indirect = 1;
+			child->pval = attr_mut_value(gattr(ctx, GKI_file_fd));
+		}
+	}
+
+	/* Delete superfluous attributes. */
+	if (i > n) {
+		struct attr_data **pprev = &parent->dir;
+		while (*pprev) {
+			struct attr_data *child = *pprev;
+			if (child->template->ops == &fdset_ops &&
+			    child->template->fidx >= n) {
+				*pprev = child->next;
+				dealloc_attr(child);
+			} else
+				pprev = &child->next;
+		}
+	}
+
+	return ret;
+}
+
+/**  Set number of dump files pending open.
+ * @param ctx   Dump file object.
+ * @param attr  Number of files attribute.
+ * @returns     Error status.
+ *
+ * Set up the number of pending files.
+ */
+static kdump_status
+num_files_post_hook(kdump_ctx_t *ctx, struct attr_data *attr)
+{
+	size_t pendfiles = 0;
+	for (attr = attr->parent->dir; attr; attr = attr->next)
+		if (attr->template->ops == &fdset_ops && !attr_isset(attr))
+			++pendfiles;
+	ctx->shared->pendfiles = pendfiles;
+
+	return maybe_open_dump(ctx);
+}
+
+/** Attribute operations for file.fdset.number. */
+const struct attr_ops num_files_ops = {
+	.pre_set = num_files_pre_hook,
+	.post_set = num_files_post_hook,
+};
+
 /**  Set dump file descriptor.
  * @param ctx   Dump file object.
  * @returns     Error status.
- *
- * Probe the given file for known file formats and initialize it for use.
  */
 static kdump_status
 file_fd_post_hook(kdump_ctx_t *ctx, struct attr_data *attr)
+{
+	int fd = attr_value(attr)->number;
+	return internal_open_fdset(ctx, 1, &fd);
+}
+
+const struct attr_ops file_fd_ops = {
+	.post_set = file_fd_post_hook,
+};
+
+/**  Open the dump.
+ * @param ctx   Dump file object.
+ * @returns     Error status.
+ *
+ * Probe a dump file for known file formats.
+ * On success, initialize the dump file context for use.
+ */
+static kdump_status
+open_dump(kdump_ctx_t *ctx)
 {
 	/* Attributes that point into ctx->shared->fcache */
 	static const enum global_keyidx fcache_attrs[] = {
@@ -89,8 +270,11 @@ file_fd_post_hook(kdump_ctx_t *ctx, struct attr_data *attr)
 		GKI_read_cache_misses,
 	};
 
+	size_t nfiles = get_num_files(ctx);
 	struct attr_data *mmap_attr;
+	struct attr_data *attr;
 	kdump_status ret;
+	int fdset[nfiles];
 	int i;
 
 	if (ctx->shared->fcache) {
@@ -98,7 +282,11 @@ file_fd_post_hook(kdump_ctx_t *ctx, struct attr_data *attr)
 			attr_embed_value(gattr(ctx, fcache_attrs[i]));
 		fcache_decref(ctx->shared->fcache);
 	}
-	ctx->shared->fcache = fcache_new(get_file_fd(ctx),
+
+	for (attr = gattr(ctx, GKI_dir_fdset)->dir; attr; attr = attr->next)
+		if (attr->template->ops == &fdset_ops)
+			fdset[attr->template->fidx] = attr_value(attr)->number;
+	ctx->shared->fcache = fcache_new(nfiles, fdset,
 					 FCACHE_SIZE, FCACHE_ORDER);
 	if (!ctx->shared->fcache)
 		return set_error(ctx, KDUMP_ERR_SYSTEM,
@@ -122,7 +310,7 @@ file_fd_post_hook(kdump_ctx_t *ctx, struct attr_data *attr)
 		ctx->shared->ops = formats[i];
 		ret = ctx->shared->ops->probe(ctx);
 		if (ret == KDUMP_OK)
-			return kdump_open_known(ctx);
+			return finish_open_dump(ctx);
 		if (ret != KDUMP_NOPROBE)
 			return ret;
 
@@ -138,8 +326,12 @@ file_fd_post_hook(kdump_ctx_t *ctx, struct attr_data *attr)
 	return set_error(ctx, KDUMP_ERR_NOTIMPL, "Unknown file format");
 }
 
+/** Finish opening a dump file of a known file format.
+ * @param ctx   Dump file object.
+ * @returns     Error status.
+ */
 static kdump_status
-kdump_open_known(kdump_ctx_t *ctx)
+finish_open_dump(kdump_ctx_t *ctx)
 {
 	set_attr_static_string(ctx, gattr(ctx, GKI_file_format),
 			       ATTR_DEFAULT, ctx->shared->ops->name);
@@ -147,9 +339,37 @@ kdump_open_known(kdump_ctx_t *ctx)
 	return KDUMP_OK;
 }
 
-const struct attr_ops file_fd_ops = {
-	.post_set = file_fd_post_hook,
-};
+DEFINE_ALIAS(open_fdset);
+
+kdump_status
+kdump_open_fdset(kdump_ctx_t *ctx, unsigned nfds, const int *fds)
+{
+	struct attr_data *attr;
+	kdump_status status;
+
+	/* Make sure we do not use a stale file descriptor value. */
+	clear_attr(ctx, gattr(ctx, GKI_num_files));
+
+	status = set_attr_number(ctx, gattr(ctx, GKI_num_files),
+				 ATTR_DEFAULT, nfds);
+	if (status != KDUMP_OK)
+		return set_error(ctx, status,
+				 "Cannot initialize fdset size");
+
+	for (attr = gattr(ctx, GKI_dir_fdset)->dir; attr; attr = attr->next) {
+		if (attr->template->ops != &fdset_ops)
+			continue;
+
+		status = set_attr_number(ctx, attr, ATTR_PERSIST,
+					 fds[attr->template->fidx]);
+		if (status != KDUMP_OK)
+			return set_error(ctx, status,
+					 "Cannot set fdset.%zu",
+					 attr->template->fidx);
+	}
+
+	return KDUMP_OK;
+}
 
 /* struct new_utsname is inside struct uts_namespace, preceded by a struct
  * kref, but the offset is not stored in VMCOREINFO. So, search some sane
@@ -323,30 +543,3 @@ const struct attr_ops ostype_ops = {
 	.post_set = ostype_post_hook,
 	.pre_clear = ostype_clear_hook,
 };
-
-void
-kdump_free(kdump_ctx_t *ctx)
-{
-	struct kdump_shared *shared = ctx->shared;
-	int slot;
-
-	rwlock_wrlock(&shared->lock);
-
-	for (slot = 0; slot < PER_CTX_SLOTS; ++slot)
-		if (shared->per_ctx_size[slot])
-			free(ctx->data[slot]);
-
-	addrxlat_ctx_decref(ctx->xlatctx);
-
-	list_del(&ctx->xlat_list);
-	xlat_decref(ctx->xlat);
-
-	attr_dict_decref(ctx->dict);
-
-	list_del(&ctx->list);
-	if (shared_decref_locked(shared))
-		rwlock_unlock(&shared->lock);
-
-	err_cleanup(&ctx->err);
-	free(ctx);
-}
