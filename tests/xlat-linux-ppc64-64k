@@ -4,9 +4,10 @@
 # Check Linux 64k page PPC64 translation
 #
 
-arch=ppc64
-ostype=1
-osver=0
-opts="pagesize=65536"
+opts=(
+    arch=ppc64
+    ostype=linux
+    page_shift=16
+)
 
 . "$srcdir"/xlat-os-common

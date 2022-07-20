@@ -6,9 +6,10 @@
 # from CR3 (so phys_base can be unspecified).
 #
 
-arch=x86_64
-ostype=1
-osver=0
-opts="xen_xlat=true"
+opts=(
+    arch=x86_64
+    ostype=linux
+    xen_xlat=true
+)
 
 . "$srcdir"/xlat-os-common

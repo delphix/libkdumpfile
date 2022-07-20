@@ -4,9 +4,9 @@
 # Check 4-level s390x translation with no OS
 #
 
-arch=s390x
-ostype=0
-osver=0
-opts=rootpgt=MACHPHYSADDR:0x8b5000
+opts=(
+    arch=s390x
+    rootpgt=MACHPHYSADDR:0x8b5000
+)
 
 . "$srcdir"/xlat-os-common

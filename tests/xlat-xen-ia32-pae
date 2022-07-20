@@ -4,9 +4,10 @@
 # Check Xen IA32 PAE translation
 #
 
-arch=ia32
-ostype=2
-osver=0
-opts=rootpgt=MACHPHYSADDR:0x100120
+opts=(
+    arch=ia32
+    ostype=xen
+    rootpgt=MACHPHYSADDR:0x100120
+)
 
 . "$srcdir"/xlat-os-common

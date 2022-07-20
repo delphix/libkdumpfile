@@ -59,7 +59,7 @@ make_room(struct page_data *pg, size_t sz)
 static int
 add_string(struct page_data *pg, char **pp)
 {
-	char tmp1, tmp2, tmp3;
+	signed char tmp1, tmp2, tmp3;
 	char *endp;
 
 	for (endp = *pp; *endp && *endp != '\"'; ++endp) {
@@ -235,7 +235,9 @@ add_page_data(struct page_data *pg, char *p)
 			c = 0;
 			bufp = pg->buf + pg->len;
 			if (pg->endian == data_le)
-				bufp += (len + (len & 1)) / 2;
+				bufp += (len + 1) / 2;
+			else
+				bufp += sz - (len + 1) / 2;
 			for (i = len; i > 0; --i) {
 				c |= unhex(*p++);
 				if (i & 1) {

@@ -26,6 +26,7 @@
    not, see <http://www.gnu.org/licenses/>.
 */
 
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -92,10 +93,18 @@ add_entry(const char *spec)
 	}
 
 	entries[nentries].orig = addr;
-	entries[nentries].dest = htole64(val);
+	entries[nentries].dest = val;
 	++nentries;
 
 	return TEST_OK;
+}
+
+static void
+entries_htole64(void)
+{
+	size_t i;
+	for (i = 0; i < nentries; ++i)
+		entries[i].dest = htole64(entries[i].dest);
 }
 
 static int
@@ -133,14 +142,16 @@ set_paging_form(addrxlat_paging_form_t *pf, const char *spec)
 	}
 
 	pf->nfields = 0;
-	do {
+	while (isdigit(*++endp)) {
 		if (pf->nfields >= ADDRXLAT_FIELDS_MAX) {
 			fprintf(stderr, "Too many paging levels!\n");
 			return TEST_ERR;
 		}
 		pf->fieldsz[pf->nfields++] =
-			strtoul(endp + 1, &endp, 0);
-	} while (*endp == ',');
+			strtoul(endp, &endp, 0);
+		if (*endp != ',')
+			break;
+	}
 
 	if (*endp) {
 		fprintf(stderr, "Invalid paging form: %s\n", spec);
@@ -444,8 +455,11 @@ main(int argc, char **argv)
 		return TEST_ERR;
 	}
 
-	lookup.param.lookup.nelem = nentries;
-	lookup.param.lookup.tbl = entries;
+	if (meth == &lookup) {
+		lookup.param.lookup.nelem = nentries;
+		lookup.param.lookup.tbl = entries;
+	} else
+		entries_htole64();
 
 	ctx = addrxlat_ctx_new();
 	if (!ctx) {

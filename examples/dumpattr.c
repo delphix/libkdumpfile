@@ -76,10 +76,8 @@ print_bitmap(kdump_ctx_t *ctx, kdump_bmp_t *bmp)
 static int
 print_blob(kdump_ctx_t *ctx, kdump_blob_t *blob)
 {
-	kdump_addr_t idx;
 	unsigned char *data;
 	size_t size;
-	kdump_status status;
 
 	data = kdump_blob_pin(blob);
 	size = kdump_blob_size(blob);
@@ -161,7 +159,7 @@ main(int argc, char **argv)
 		return -1;
 	}
 
-	res = kdump_set_number_attr(ctx, KDUMP_ATTR_FILE_FD, fd);
+	res = kdump_open_fd(ctx, fd);
 	if (res != KDUMP_OK) {
 		fprintf(stderr, "File initialization failed: %s\n",
 			kdump_get_err(ctx));

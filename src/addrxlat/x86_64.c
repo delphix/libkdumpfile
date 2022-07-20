@@ -48,6 +48,12 @@
 /** Maximum virtual address bits for 5-level paging (architecture limit). */
 #define VIRTADDR_5L_BITS_MAX	57
 
+/** Position of the LA57 bit in CR4. */
+#define CR4_BIT_LA57		12
+
+/** Check whether LA57 (5-level paging) is enabled in CR4. */
+#define CR4_LA57_ISSET(val)	((val) & ((uint64_t)1 << CR4_BIT_LA57))
+
 /** Page shift (log2 4K). */
 #define PAGE_SHIFT		12
 
@@ -326,8 +332,9 @@ linux_directmap(struct os_init_data *ctl)
 	addrxlat_status status;
 
 	status = linux_directmap_by_pgt(&layout[0], ctl->sys, ctl->ctx);
-	if (status != ADDRXLAT_OK && ctl->osdesc->ver)
-		status = linux_directmap_by_ver(&layout[0], ctl->osdesc->ver);
+	if (status != ADDRXLAT_OK && opt_isset(ctl->popt, version_code))
+		status = linux_directmap_by_ver(&layout[0],
+						ctl->popt.version_code);
 	remove_rdirect(ctl->sys);
 	if (status == ADDRXLAT_OK) {
 		layout[0].meth = ADDRXLAT_SYS_METH_DIRECT;
@@ -471,8 +478,8 @@ linux_ktext_meth(struct os_init_data *ctl)
 	addrxlat_addr_t stext;
 	addrxlat_status status;
 
-	if (ctl->popt.val[OPT_phys_base].set) {
-		set_ktext_offset(ctl->sys, (ctl->popt.val[OPT_phys_base].addr -
+	if (opt_isset(ctl->popt, phys_base)) {
+		set_ktext_offset(ctl->sys, (ctl->popt.phys_base -
 					    LINUX_KTEXT_START));
 		return ADDRXLAT_OK;
 	}
@@ -647,9 +654,9 @@ set_xen_p2m(struct os_init_data *ctl)
 
 	map = ctl->sys->map[ADDRXLAT_SYS_MAP_KPHYS_MACHPHYS];
 	map_clear(map);
-	if (!ctl->popt.val[OPT_xen_p2m_mfn].set)
+	if (!opt_isset(ctl->popt, xen_p2m_mfn))
 		return ADDRXLAT_OK; /* leave undefined */
-	p2m_maddr = ctl->popt.val[OPT_xen_p2m_mfn].num << PAGE_SHIFT;
+	p2m_maddr = ctl->popt.xen_p2m_mfn << PAGE_SHIFT;
 
 	meth = &ctl->sys->meth[ADDRXLAT_SYS_METH_KPHYS_MACHPHYS];
 	meth->kind = ADDRXLAT_PGT;
@@ -684,6 +691,7 @@ map_linux_x86_64(struct os_init_data *ctl)
 	};
 
 	addrxlat_meth_t *meth;
+	addrxlat_addr_t sme_mask;
 	addrxlat_status status;
 
 	/* Set up page table translation. */
@@ -691,9 +699,17 @@ map_linux_x86_64(struct os_init_data *ctl)
 	meth = &ctl->sys->meth[ADDRXLAT_SYS_METH_PGT];
 	meth->param.pgt.root.addr &= ~PAGE_MASK;
 
+	status = get_number(ctl->ctx, "sme_mask", &sme_mask);
+	if (status == ADDRXLAT_OK)
+		meth->param.pgt.pte_mask = sme_mask;
+	else if (status == ADDRXLAT_ERR_NODATA)
+		clear_error(ctl->ctx);
+	else
+		return status;
+
 	/* Take care of machine physical <-> kernel physical mapping. */
-	if (ctl->popt.val[OPT_xen_xlat].set &&
-	    ctl->popt.val[OPT_xen_xlat].num) {
+	if (opt_isset(ctl->popt, xen_xlat) &&
+	    ctl->popt.xen_xlat) {
 		status = set_xen_p2m(ctl);
 		if (status != ADDRXLAT_OK)
 			return status;
@@ -817,9 +833,9 @@ setup_xen_pgt(struct os_init_data *ctl)
 	pgt = meth->param.pgt.root.addr;
 	if (pgt >= XEN_DIRECTMAP) {
 		off = -XEN_DIRECTMAP;
-	} else if (ctl->popt.val[OPT_phys_base].set) {
+	} else if (opt_isset(ctl->popt, phys_base)) {
 		addrxlat_addr_t xen_virt_start = pgt & ~(XEN_TEXT_SIZE - 1);
-		off = ctl->popt.val[OPT_phys_base].addr - xen_virt_start;
+		off = ctl->popt.phys_base - xen_virt_start;
 	} else
 		return ADDRXLAT_ERR_NODATA;
 
@@ -884,20 +900,21 @@ map_xen_x86_64(struct os_init_data *ctl)
 		layout[0].last =
 			XEN_DIRECTMAP_BIGMEM + XEN_DIRECTMAP_SIZE_3_5T - 1;
 		layout[1].first = XEN_TEXT_4_4;
-	} else if (ctl->osdesc->ver >= ADDRXLAT_VER_XEN(4, 0)) {
+	} else if (opt_isset(ctl->popt, version_code) &&
+		   ctl->popt.version_code >= ADDRXLAT_VER_XEN(4, 0)) {
 		/* !BIGMEM is assumed for Xen 4.6+. Can we do better? */
 
-		if (ctl->osdesc->ver >= ADDRXLAT_VER_XEN(4, 4))
+		if (ctl->popt.version_code >= ADDRXLAT_VER_XEN(4, 4))
 			layout[1].first = XEN_TEXT_4_4;
-		else if (ctl->osdesc->ver >= ADDRXLAT_VER_XEN(4, 3))
+		else if (ctl->popt.version_code >= ADDRXLAT_VER_XEN(4, 3))
 			layout[1].first = XEN_TEXT_4_3;
 		else
 			layout[1].first = XEN_TEXT_4_0;
-	} else if (ctl->osdesc->ver) {
+	} else if (opt_isset(ctl->popt, version_code)) {
 		layout[0].last =
 			XEN_DIRECTMAP + XEN_DIRECTMAP_SIZE_1T - 1;
 
-		if (ctl->osdesc->ver >= ADDRXLAT_VER_XEN(3, 2))
+		if (ctl->popt.version_code >= ADDRXLAT_VER_XEN(3, 2))
 			layout[1].first = XEN_TEXT_3_2;
 		else
 			/* Prior to Xen 3.2, text was in direct mapping. */
@@ -940,6 +957,108 @@ static const struct sys_region layout_5level[] = {
 	SYS_REGION_END
 };
 
+/** Determine the number of virtual address bits.
+ * @param ctl      Initialization data.
+ * @returns        Error status.
+ *
+ * On successful return, the virt_bits option is valid.
+ */
+static addrxlat_status
+get_virt_bits(struct os_init_data *ctl)
+{
+	addrxlat_addr_t cr4;
+	addrxlat_status status;
+
+	if (opt_isset(ctl->popt, virt_bits))
+		return ADDRXLAT_OK;
+
+	status = get_reg(ctl->ctx, "cr4", &cr4);
+	if (status == ADDRXLAT_OK) {
+		ctl->popt.virt_bits = CR4_LA57_ISSET(cr4)
+			? VIRTADDR_5L_BITS_MAX
+			: VIRTADDR_BITS_MAX;
+		return ADDRXLAT_OK;
+	} else if (status != ADDRXLAT_ERR_NODATA)
+		return status;
+	clear_error(ctl->ctx);
+
+	if (ctl->os_type == OS_LINUX) {
+		addrxlat_addr_t l5_enabled;
+		status = get_number(ctl->ctx, "pgtable_l5_enabled",
+				    &l5_enabled);
+		if (status == ADDRXLAT_OK) {
+			ctl->popt.virt_bits = l5_enabled
+				? VIRTADDR_5L_BITS_MAX
+				: VIRTADDR_BITS_MAX;
+			return ADDRXLAT_OK;
+		} else if (status != ADDRXLAT_ERR_NODATA)
+			return status;
+		clear_error(ctl->ctx);
+
+		status = get_symval(ctl->ctx, "_stext", &l5_enabled);
+		if (status == ADDRXLAT_OK) {
+			ctl->popt.virt_bits = VIRTADDR_BITS_MAX;
+			return ADDRXLAT_OK;
+		} else if (status != ADDRXLAT_ERR_NODATA)
+			return status;
+		clear_error(ctl->ctx);
+
+		if (opt_isset(ctl->popt, version_code) &&
+		    ctl->popt.version_code < ADDRXLAT_VER_LINUX(4, 13, 0)) {
+			ctl->popt.virt_bits = VIRTADDR_BITS_MAX;
+			return ADDRXLAT_OK;
+		}
+	} else if (ctl->os_type == OS_XEN) {
+		/* Update this when/if Xen implements 5-level paging. */
+		ctl->popt.virt_bits = VIRTADDR_BITS_MAX;
+		return ADDRXLAT_OK;
+	} else
+		status = ADDRXLAT_ERR_NOTIMPL;
+
+	return set_error(ctl->ctx, status,
+			 "Cannot determine 5-level paging");
+}
+
+/** Initialize the page table translation method.
+ * @param ctl      Initialization data.
+ * @returns        Error status.
+ */
+static addrxlat_status
+init_pgt_meth(struct os_init_data *ctl)
+{
+	static const addrxlat_paging_form_t x86_64_pf = {
+		.pte_format = ADDRXLAT_PTE_X86_64,
+		.nfields = 5,
+		.fieldsz = { 12, 9, 9, 9, 9, 9 }
+	};
+
+	addrxlat_meth_t *meth;
+	addrxlat_status status;
+
+	meth = &ctl->sys->meth[ADDRXLAT_SYS_METH_PGT];
+	meth->kind = ADDRXLAT_PGT;
+	meth->target_as = ADDRXLAT_MACHPHYSADDR;
+	if (opt_isset(ctl->popt, rootpgt))
+		meth->param.pgt.root = ctl->popt.rootpgt;
+	else
+		meth->param.pgt.root.as = ADDRXLAT_NOADDR;
+	meth->param.pgt.pte_mask = 0;
+	meth->param.pgt.pf = x86_64_pf;
+
+	status = get_virt_bits(ctl);
+	if (status != ADDRXLAT_OK)
+		return status;
+
+	if (ctl->popt.virt_bits == VIRTADDR_BITS_MAX)
+		meth->param.pgt.pf.nfields = 5;
+	else if (ctl->popt.virt_bits == VIRTADDR_5L_BITS_MAX)
+		meth->param.pgt.pf.nfields = 6;
+	else
+		return bad_virt_bits(ctl->ctx, ctl->popt.virt_bits);
+
+	return ADDRXLAT_OK;
+}
+
 /** Initialize a translation map for an x86_64 OS.
  * @param ctl  Initialization data.
  * @returns    Error status.
@@ -947,33 +1066,15 @@ static const struct sys_region layout_5level[] = {
 addrxlat_status
 sys_x86_64(struct os_init_data *ctl)
 {
-	static const addrxlat_paging_form_t x86_64_pf = {
-		.pte_format = ADDRXLAT_PTE_X86_64,
-		.nfields = 5,
-		.fieldsz = { 12, 9, 9, 9, 9, 9 }
-	};
 	addrxlat_map_t *map;
 	addrxlat_meth_t *meth;
 	addrxlat_status status;
 
+	status = init_pgt_meth(ctl);
+	if (status != ADDRXLAT_OK)
+		return status;
+
 	meth = &ctl->sys->meth[ADDRXLAT_SYS_METH_PGT];
-	meth->kind = ADDRXLAT_PGT;
-	meth->target_as = ADDRXLAT_MACHPHYSADDR;
-	if (ctl->popt.val[OPT_rootpgt].set)
-		meth->param.pgt.root = ctl->popt.val[OPT_rootpgt].fulladdr;
-	else
-		meth->param.pgt.root.as = ADDRXLAT_NOADDR;
-	meth->param.pgt.pte_mask =
-		opt_num_default(&ctl->popt, OPT_pte_mask, 0);
-	meth->param.pgt.pf = x86_64_pf;
-
-	if (ctl->popt.val[OPT_levels].set) {
-		long levels = ctl->popt.val[OPT_levels].num;
-		if (levels < 4 || levels > 5)
-			return bad_paging_levels(ctl->ctx, levels);
-		meth->param.pgt.pf.nfields = levels + 1;
-	}
-
 	status = sys_set_layout(ctl, ADDRXLAT_SYS_MAP_HW,
 				(meth->param.pgt.pf.nfields == 6
 				 ? layout_5level
@@ -991,14 +1092,11 @@ sys_x86_64(struct os_init_data *ctl)
 	if (status != ADDRXLAT_OK)
 		return status;
 
-	switch (ctl->osdesc->type) {
-	case ADDRXLAT_OS_LINUX:
+	if (ctl->os_type == OS_LINUX)
 		return map_linux_x86_64(ctl);
 
-	case ADDRXLAT_OS_XEN:
+	if (ctl->os_type == OS_XEN)
 		return map_xen_x86_64(ctl);
 
-	default:
-		return ADDRXLAT_OK;
-	}
+	return ADDRXLAT_OK;
 }

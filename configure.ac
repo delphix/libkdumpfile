@@ -58,13 +58,16 @@ AS_IF([test "x$enable_internal_doc" != xno],
     [DX_ENV_APPEND(ENABLE_INTERNAL, NO)])
 
 AC_CHECK_SIZEOF(long)
+AC_CHECK_SIZEOF(off_t)
+AC_SUBST(SIZEOF_OFF_T, $ac_cv_sizeof_off_t)
 
 dnl This makes sure pkg.m4 is available.
 m4_pattern_forbid([^_?PKG_[A-Z_]+$],[*** pkg.m4 missing, please install pkg-config])
 
 kdump_COMPRESSION(zlib, ZLIB, z, uncompress)
-kdump_COMPRESSION(lzo, LZO, lzo2, lzo1x_decompress_safe)
+kdump_COMPRESSION(lzo2, LZO, lzo2, lzo1x_decompress_safe)
 kdump_COMPRESSION(snappy, SNAPPY, snappy, snappy_uncompress)
+kdump_COMPRESSION(libzstd, ZSTD, zstd, ZSTD_decompress)
 
 dnl check for pthread support
 AC_ARG_WITH(pthread,

@@ -53,7 +53,7 @@ static const struct attr_ops vmcoreinfo_lines_ops;
 static void
 dealloc_vmcoreinfo(struct attr_data *dir)
 {
-	struct attr_data *child, *child2;
+	struct attr_data *child;
 
 	if (dir->template->type != KDUMP_DIRECTORY)
 		return;
@@ -262,26 +262,13 @@ const struct attr_ops vmcoreinfo_raw_ops = {
 static kdump_status
 get_raw_locked(kdump_ctx_t *ctx, char **raw)
 {
-	static const struct ostype_attr_map raw_map[] = {
-		{ ADDRXLAT_OS_LINUX, GKI_linux_vmcoreinfo_raw },
-		{ ADDRXLAT_OS_XEN, GKI_xen_vmcoreinfo_raw },
-		{ ADDRXLAT_OS_UNKNOWN }
-	};
-	struct attr_data *attr = ostype_attr(ctx, raw_map);
+	struct attr_data *attr;
 	size_t len;
 	kdump_status status;
 
-	if (!attr)
-		return set_error(ctx, KDUMP_ERR_NOTIMPL,
-				 "No VMCOREINFO for this OS");
-	if (!attr_isset(attr))
-		return set_error(ctx, KDUMP_ERR_NODATA,
-				 "No VMCOREINFO data");
-
-	status = attr_revalidate(ctx, attr);
+	status = ostype_attr(ctx, "vmcoreinfo.raw", &attr);
 	if (status != KDUMP_OK)
-		return set_error(ctx, status,
-				 "Value cannot be revalidated");
+		return status;
 
 	len = attr_value(attr)->blob->size;
 	*raw = malloc(len + 1);
@@ -308,22 +295,25 @@ kdump_vmcoreinfo_raw(kdump_ctx_t *ctx, char **raw)
 	return ret;
 }
 
+/**  Get a VMCOREINFO line.
+ * @param ctx       Dump file object.
+ * @param[in] key   Name of the VMCOREINFO variable (part before '=').
+ * @param[out] val  Filled with the part after (first) '='.
+ * @returns         Error status.
+ *
+ * This is the implementation of @xref kdump_vmcoreinfo_line, called
+ * with the shared lock held.
+ */
 static kdump_status
-get_line_locked(kdump_ctx_t *ctx, const char *key,
-		const char **val)
+get_line_locked(kdump_ctx_t *ctx, const char *key, char **val)
 {
-	static const struct ostype_attr_map lines_map[] = {
-		{ ADDRXLAT_OS_LINUX, GKI_linux_vmcoreinfo_lines },
-		{ ADDRXLAT_OS_XEN, GKI_xen_vmcoreinfo_lines },
-		{ ADDRXLAT_OS_UNKNOWN }
-	};
-	const struct attr_data *base = ostype_attr(ctx, lines_map);
+	struct attr_data *base;
 	struct attr_data *attr;
 	kdump_status status;
 
-	if (!base)
-		return set_error(ctx, KDUMP_ERR_NOTIMPL,
-				 "No VMCOREINFO for this OS");
+	status = ostype_attr(ctx, "vmcoreinfo.lines", &base);
+	if (status != KDUMP_OK)
+		return status;
 
 	attr = lookup_dir_attr(ctx->dict, base, key, strlen(key));
 	if (!attr)
@@ -366,24 +356,16 @@ kdump_status
 kdump_vmcoreinfo_symbol(kdump_ctx_t *ctx, const char *symname,
 			kdump_addr_t *symvalue)
 {
-	static const struct ostype_attr_map symbol_map[] = {
-		{ ADDRXLAT_OS_LINUX, GKI_linux_symbol },
-		{ ADDRXLAT_OS_XEN, GKI_xen_symbol },
-		{ ADDRXLAT_OS_UNKNOWN }
-	};
-
-	const struct attr_data *base;
+	struct attr_data *base;
 	struct attr_data *attr;
 	kdump_status ret;
 
 	clear_error(ctx);
 	rwlock_rdlock(&ctx->shared->lock);
 
-	base = ostype_attr(ctx, symbol_map);
-	if (!base) {
-		ret = set_error(ctx, KDUMP_ERR_NOTIMPL, "Unsupported OS");
+	ret = ostype_attr(ctx, "vmcoreinfo.SYMBOL", &base);
+	if (ret != KDUMP_OK)
 		goto out;
-	}
 
 	attr = lookup_dir_attr(ctx->dict, base, symname, strlen(symname));
 	if (!attr) {

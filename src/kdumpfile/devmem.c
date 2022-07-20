@@ -40,116 +40,47 @@
 #include <stdlib.h>
 #include <string.h>
 #include <endian.h>
-#include <signal.h>
-#include <ucontext.h>
 #include <sys/sysmacros.h>
 
 #define FN_VMCOREINFO	"/sys/kernel/vmcoreinfo"
 #define FN_IOMEM	"/proc/iomem"
 #define FN_XEN		"/proc/xen"
 #define FN_XEN_CAPS	FN_XEN "/capabilities"
+#define FN_XEN_GUEST_TYPE	"/sys/hypervisor/guest_type"
 
 struct devmem_priv {
 	unsigned cache_size;
 	struct cache_entry *ce;
 };
 
-#if defined(__i386__) || defined(__x86_64__)
-
-/* The Xen hypervisor cpuid leaves can be found at the first otherwise
- * unused 0x100 aligned boundary starting from 0x40000000.
- */
-#define XEN_CPUID_FIRST_LEAF	0x40000000
-#define XEN_CPUID_LEAF_ALIGN	0x100
-#define XEN_CPUID_MAX_LEAF	0x40010000
-
-/* Taken from Xen public headers to avoid build dependency on Xen. */
-#define XEN_CPUID_SIGNATURE_EBX	0x566e6558 /* "XenV" */
-#define XEN_CPUID_SIGNATURE_ECX	0x65584d4d /* "MMXe" */
-#define XEN_CPUID_SIGNATURE_EDX	0x4d4d566e /* "nVMM" */
-
-extern char xen_cpuid_ud[];
-extern char xen_cpuid_ret[];
-
-static void
-xen_sigill(int sig, siginfo_t *si, void *ucontext)
+static kdump_status
+check_xen_pv(kdump_ctx_t *ctx, bool *result)
 {
-	greg_t *regs = ((ucontext_t*)ucontext)->uc_mcontext.gregs;
-	if (si->si_addr == (void*)&xen_cpuid_ud) {
-#ifdef __x86_64__
-		regs[REG_RIP] = (greg_t)&xen_cpuid_ret;
-#else
-		regs[REG_EIP] = (greg_t)&xen_cpuid_ret;
-#endif
-	}
-}
+	FILE *f;
+	char guest_type[40];
+	kdump_status ret;
 
-static int
-xen_cpuid(uint32_t leaf, uint32_t subleaf,
-	  uint32_t *eax, uint32_t *ebx, uint32_t *ecx, uint32_t *edx)
-{
-	int ret;
+	f = fopen(FN_XEN_GUEST_TYPE, "r");
+	if (!f)
+		return set_error(ctx, KDUMP_ERR_SYSTEM,
+				 "Error opening %s", FN_XEN_GUEST_TYPE);
 
-	__asm__ (
-		/* forced emulation signature: */
-		"movl $-1,%4"		"\n\t"
-		"xen_cpuid_ud:"		"\n\t"
-		"ud2a"			"\n\t"
-		".ascii \"xen\""	"\n\t"
-		"cpuid"			"\n\t"
-		"movl $0,%4"		"\n\t"
-		"xen_cpuid_ret:"	"\n\t"
-		: "=a" (*eax), "=b" (*ebx), "=c" (*ecx), "=d" (*edx),
-		  "=&g" (ret)
-		: "0" (leaf), "2" (subleaf)
-		);
+	ret = KDUMP_OK;
+	if (fscanf(f, "%39s", guest_type) > 0) {
+		*result = !strcmp(guest_type, "PV");
+	} else
+		ret = set_error(ctx, KDUMP_ERR_SYSTEM,
+				"Error reading %s", FN_XEN_GUEST_TYPE);
+
+	fclose(f);
 	return ret;
 }
-
-static int
-is_xen_pv(void)
-{
-	const struct sigaction act = {
-		.sa_sigaction = xen_sigill,
-		.sa_flags = SA_SIGINFO | SA_RESETHAND,
-	};
-	struct sigaction oldact;
-	uint32_t eax, ebx, ecx, edx;
-	uint32_t base;
-	int is_pv = 0;
-
-	sigaction(SIGILL, &act, &oldact);
-	for (base = XEN_CPUID_FIRST_LEAF; base < XEN_CPUID_MAX_LEAF;
-	     base += XEN_CPUID_LEAF_ALIGN)
-	{
-		if (xen_cpuid(base, 0, &eax, &ebx, &ecx, &edx))
-			break;
-		if (ebx == XEN_CPUID_SIGNATURE_EBX &&
-		    ecx == XEN_CPUID_SIGNATURE_ECX &&
-		    edx == XEN_CPUID_SIGNATURE_EDX) {
-			is_pv = 1;
-			break;
-		}
-	}
-	sigaction(SIGILL, &oldact, NULL);
-	return is_pv;
-}
-
-#else
-/* non-x86 */
-
-static inline int
-is_xen_pv(void)
-{
-	return 1;
-}
-
-#endif
 
 static kdump_status
 check_xen(kdump_ctx_t *ctx)
 {
 	kdump_xen_type_t xen_type;
+	bool is_xen_pv = false;
 	FILE *f;
 	kdump_status ret;
 
@@ -171,11 +102,13 @@ check_xen(kdump_ctx_t *ctx)
 	} else if (errno != ENOENT)
 		ret = set_error(ctx, KDUMP_ERR_SYSTEM,
 				"Error opening %s", FN_XEN_CAPS);
+	if (ret == KDUMP_OK)
+		ret = check_xen_pv(ctx, &is_xen_pv);
 	if (ret != KDUMP_OK)
 		return ret;
 
 	set_xen_type(ctx, xen_type);
-	set_xen_xlat(ctx, is_xen_pv() ? KDUMP_XEN_NONAUTO : KDUMP_XEN_AUTO);
+	set_xen_xlat(ctx, is_xen_pv ? KDUMP_XEN_NONAUTO : KDUMP_XEN_AUTO);
 	return KDUMP_OK;
 }
 
@@ -310,7 +243,7 @@ devmem_get_page(kdump_ctx_t *ctx, struct page_io *pio)
 	ce->key = pio->addr.addr;
 	mutex_lock(&ctx->shared->cache_lock);
 	ret = fcache_get_chunk(ctx->shared->fcache, &pio->chunk,
-			       get_page_size(ctx), pio->addr.addr);
+			       get_page_size(ctx), 0, pio->addr.addr);
 	mutex_unlock(&ctx->shared->cache_lock);
 	if (ret != KDUMP_OK) {
 		--ce->refcnt;
@@ -368,7 +301,7 @@ devmem_probe(kdump_ctx_t *ctx)
 	struct stat st;
 	kdump_status ret;
 
-	if (fstat(get_file_fd(ctx), &st))
+	if (fstat(fcache_fd(ctx->shared->fcache, 0), &st))
 		return set_error(ctx, KDUMP_ERR_SYSTEM, "Cannot stat file");
 
 	if (!S_ISCHR(st.st_mode) ||
@@ -389,6 +322,10 @@ devmem_probe(kdump_ctx_t *ctx)
 #else
 	set_byte_order(ctx, KDUMP_BIG_ENDIAN);
 #endif
+
+	if (get_num_files(ctx) > 1)
+		return set_error(ctx, KDUMP_ERR_NOTIMPL,
+				 "Multiple files not implemented");
 
 	ret = set_page_size(ctx, sysconf(_SC_PAGESIZE));
 	if (ret != KDUMP_OK)

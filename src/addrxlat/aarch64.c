@@ -29,9 +29,13 @@
 */
 
 #include <stdlib.h>
+#include <string.h>
 
 #include "addrxlat-priv.h"
 #include <linux/version.h>
+
+/* Maximum virtual address bits (architectural limit) */
+#define VA_MAX_BITS	52
 
 /* Maximum physical address bits (architectural limit) */
 #define PA_MAX_BITS	48
@@ -49,9 +53,6 @@ enum pte_type {
 	PTE_TYPE_TABLE = 3,	/**< Table descriptor. */
 };
 
-/** 1G page mask. */
-#define PAGE_MASK_1G		ADDR_MASK(30)
-
 /** Descriptive names for page tables.
  * These names are used in error messages.
  */
@@ -60,6 +61,8 @@ static const char pgt_full_name[][16] = {
 	"Level 3 table",
 	"Level 2 table",
 	"Level 1 table",
+	"Level 0 table",
+	"Level -1 table",
 };
 
 /** Short names for page table entries.
@@ -71,6 +74,7 @@ static const char pte_name[][4] = {
 	"pte",
 	"pmd",
 	"pud",
+	"p4d",
 	"pgd",
 };
 
@@ -127,11 +131,12 @@ pgt_aarch64(addrxlat_step_t *step)
 	step->base.as = step->meth->target_as;
 
 	if (PTE_TYPE(pte) == PTE_TYPE_BLOCK) {
-		addrxlat_addr_t mask = pf_table_mask(
-			&step->meth->param.pgt.pf, step->remain);
-		if (mask > PAGE_MASK_1G)
+		if (step->remain > 4 ||
+		    (step->remain > 3 &&
+		     step->meth->param.pgt.pf.fieldsz[0] != 9))
 			return pte_invalid(step);
-		step->base.addr &= ~mask;
+		step->base.addr &= ~pf_table_mask(
+			&step->meth->param.pgt.pf, step->remain);
 		return pgt_huge_page(step);
 	}
 
@@ -142,23 +147,6 @@ pgt_aarch64(addrxlat_step_t *step)
 	return ADDRXLAT_OK;
 }
 
-#define is_linear_addr(addr, kernel_ver, va_bits)		   \
-	(((kernel_ver) < KERNEL_VERSION(5, 4, 0)) ?		   \
-	 (!!((unsigned long)(addr) & (1UL << ((va_bits) - 1)))) :  \
-	 (!((unsigned long)(addr) & (1UL << ((va_bits) - 1)))))
-
-static unsigned long
-get_page_offset(unsigned long kernel_ver, addrxlat_addr_t va_bits) {
-	unsigned long page_offset;
-
-	if (kernel_ver < KERNEL_VERSION(5, 4, 0))
-		page_offset = ((0xffffffffffffffffUL) -
-				((1UL) << (va_bits - 1)) + 1);
-	else
-		page_offset = (-(1UL << va_bits));
-	return page_offset;
-}
-
 /** Determine Linux page table root.
  * @param ctl	     Initialization data.
  * @param[out] root  Page table root address (set on successful return).
@@ -167,66 +155,33 @@ get_page_offset(unsigned long kernel_ver, addrxlat_addr_t va_bits) {
 static addrxlat_status
 get_linux_pgtroot(struct os_init_data *ctl, addrxlat_fulladdr_t *root)
 {
-	addrxlat_status status;
-	addrxlat_addr_t root_va;
-
-	addrxlat_addr_t va_bits;
-	addrxlat_addr_t phys_base;
 	addrxlat_addr_t kimage_voffset;
-	int no_kimage_voffset = 0;
+	addrxlat_status status;
 
-	unsigned long page_offset;
-	unsigned long kernel_ver;
-
-
-	status = get_symval(ctl->ctx, "swapper_pg_dir",
-			    &root_va);
+	status = get_symval(ctl->ctx, "swapper_pg_dir", &root->addr);
 	if (status != ADDRXLAT_OK)
 		return set_error(ctl->ctx, status,
 				 "Cannot determine page table virtual address");
 
-	/*
-	 * This code will only work with vmcores produced by
-	 * Linux Kernel versions 4.12 and above. Makedumpfile
-	 * for kernels before 4.12 uses a heuristic based on
-	 * reading vmcore load segment addressess and finds
-	 * va_bits and phys_offset. This code does not support
-	 * such logic.
-	 */
-	status = get_number(ctl->ctx, "VA_BITS",
-			    &va_bits);
-	if (status != ADDRXLAT_OK)
-		return set_error(ctl->ctx, status,
-				 "Cannot determine VA_BITS");
+	/* If the read callback can handle virtual addresses, we're done. */
+	if (ctl->ctx->cb.read_caps & ADDRXLAT_CAPS(ADDRXLAT_KVADDR)) {
+		addrxlat_buffer_t *buffer;
 
-	status = get_number(ctl->ctx, "kimage_voffset" ,
-			    &kimage_voffset);
-	if (status != ADDRXLAT_OK)
-		 no_kimage_voffset = 1;
+		root->as = ADDRXLAT_KVADDR;
+		status = get_cache_buf(ctl->ctx, root, &buffer);
+		if (status == ADDRXLAT_OK)
+			return ADDRXLAT_OK;
 
-	kernel_ver = ctl->osdesc->ver;
-
-
-	if (no_kimage_voffset || is_linear_addr(root_va, kernel_ver, va_bits)) {
-		status = get_number(ctl->ctx, "PHYS_OFFSET" ,
-				    &phys_base);
-		if (status != ADDRXLAT_OK)
-			return set_error(ctl->ctx, status,
-				 "Cannot determine PHYS_OFFSET");
-
-		page_offset = get_page_offset(kernel_ver, va_bits);
-
-		if (kernel_ver < KERNEL_VERSION(5, 4, 0)) {
-			 root->addr = ((root_va & ~page_offset) + phys_base);
-		} else {
-			 root->addr =  (root_va + phys_base - page_offset);
-		}
-	} else {
-	    root->addr = root_va - kimage_voffset;
+		clear_error(ctl->ctx);
 	}
 
-	root->as =  ADDRXLAT_KPHYSADDR;
+	status = get_number(ctl->ctx, "kimage_voffset", &kimage_voffset);
+	if (status != ADDRXLAT_OK)
+		return set_error(ctl->ctx, status,
+				 "Cannot determine kimage_voffset");
 
+	root->addr -= kimage_voffset;
+	root->as = ADDRXLAT_KPHYSADDR;
 	return ADDRXLAT_OK;
 }
 
@@ -235,6 +190,99 @@ get_linux_pgtroot(struct os_init_data *ctl, addrxlat_fulladdr_t *root)
 #define PHYSADDR_MASK		ADDR_MASK(PHYSADDR_BITS_MAX)
 #define VIRTADDR_MAX		UINT64_MAX
 
+/** Get Linux page offset.
+ * @param ctl       Initialization data.
+ * @param va_bits   Size of virtual addresses in bits (CONFIG_VA_BITS).
+ * @param[out] off  Set to PAGE_OFFSET on success.
+ * @returns         Error status.
+ */
+static addrxlat_status
+linux_page_offset(struct os_init_data *ctl, unsigned va_bits,
+		  addrxlat_addr_t *off)
+{
+	addrxlat_addr_t top;	/* top VA range address */
+	addrxlat_addr_t half;	/* upper half of the top VA range */
+	addrxlat_addr_t stext;
+	addrxlat_status status;
+
+	top = VIRTADDR_MAX & ~ADDR_MASK(va_bits);
+	half = VIRTADDR_MAX & ~ADDR_MASK(va_bits - 1);
+
+	/*
+	 * Use any kernel text symbol to decide whether the linear
+	 * mapping is in the lower half or the upper half of the
+	 * kernel VA range.
+	 * Cf. kernel commit 14c127c957c1c6070647c171e72f06e0db275ebf
+	 */
+	status = get_symval(ctl->ctx, "_stext", &stext);
+	if (status == ADDRXLAT_OK) {
+		*off = (stext >= half)
+			? top
+			: half;
+	} else if (status == ADDRXLAT_ERR_NODATA) {
+		/* Fall back to checking kernel version number. */
+		clear_error(ctl->ctx);
+		if (opt_isset(ctl->popt, version_code)) {
+			*off = (ctl->popt.version_code >= KERNEL_VERSION(5, 4, 0))
+				? top
+				: half;
+			status = ADDRXLAT_OK;
+		}
+	}
+
+	return status;
+}
+
+/** Set up a linear mapping region.
+ * @param ctl      Initialization data.
+ * @returns        @c ADDRXLAT_OK if the mapping was added.
+ */
+static addrxlat_status
+add_linux_linear_map(struct os_init_data *ctl)
+{
+	struct sys_region layout[2];
+	addrxlat_step_t step;
+	addrxlat_addr_t phys;
+	addrxlat_meth_t *meth;
+	addrxlat_status status;
+
+	status = linux_page_offset(ctl, ctl->popt.virt_bits, &layout[0].first);
+	if (status != ADDRXLAT_OK)
+		return status;
+	layout[0].last = layout[0].first | ADDR_MASK(ctl->popt.virt_bits - 1);
+
+	step.ctx = ctl->ctx;
+	step.sys = ctl->sys;
+	step.meth = &ctl->sys->meth[ADDRXLAT_SYS_METH_PGT];
+
+	status = lowest_mapped(&step, &layout[0].first, layout[0].last);
+	if (status != ADDRXLAT_OK)
+		return status;
+	phys = step.base.addr;
+	status = highest_mapped(&step, &layout[0].last, layout[0].first);
+	if (status != ADDRXLAT_OK)
+		return status;
+	if (step.base.addr - phys != layout[0].last - layout[0].first)
+		return ADDRXLAT_ERR_NOTIMPL;
+
+	meth = &ctl->sys->meth[ADDRXLAT_SYS_METH_DIRECT];
+	meth->kind = ADDRXLAT_LINEAR;
+	meth->target_as = ADDRXLAT_KPHYSADDR;
+	meth->param.linear.off = phys - layout[0].first;
+
+	layout[0].meth = ADDRXLAT_SYS_METH_DIRECT;
+	layout[0].act = SYS_ACT_NONE;
+	layout[1].meth = ADDRXLAT_SYS_METH_NUM;
+	status = sys_set_layout(ctl, ADDRXLAT_SYS_MAP_KV_PHYS, layout);
+	if (status != ADDRXLAT_OK)
+		return status;
+
+	layout[0].meth = ADDRXLAT_SYS_METH_RDIRECT;
+	layout[0].first = phys;
+	layout[0].last = step.base.addr;
+	layout[0].act = SYS_ACT_RDIRECT;
+	return sys_set_layout(ctl, ADDRXLAT_SYS_MAP_KPHYS_DIRECT, layout);
+}
 
 /** Initialize a translation map for Linux/aarch64.
  * @param ctl  Initialization data.
@@ -243,69 +291,150 @@ get_linux_pgtroot(struct os_init_data *ctl, addrxlat_fulladdr_t *root)
 static addrxlat_status
 map_linux_aarch64(struct os_init_data *ctl)
 {
-	static const addrxlat_paging_form_t aarch64_pf = {
-		.pte_format = ADDRXLAT_PTE_AARCH64,
-		.nfields = 5,
-		.fieldsz = { 12, 9, 9, 9, 9, 9 }
-	};
-
-	/*
-	 * Generic aarch64 layout, depends on current va_bits
-	 *
-	 * Aarch64 kernel does have a linear mapping region, the location
-	 * of which changed in the 5.4 kernel. But since it is covered
-	 * by swapper pgt anyway we don't bother to reflect it here.
-	 */
-	struct sys_region aarch64_layout_generic[] = {
-	    {  0,  0,			/* lower half	    */
-	       ADDRXLAT_SYS_METH_PGT },
-
-	    {  0,  VIRTADDR_MAX,	 /* higher half	     */
-	       ADDRXLAT_SYS_METH_PGT },
-	    SYS_REGION_END
-	};
-
-	addrxlat_map_t *map;
 	addrxlat_meth_t *meth;
 	addrxlat_status status;
-	addrxlat_addr_t va_bits;
 
 	meth = &ctl->sys->meth[ADDRXLAT_SYS_METH_PGT];
-	meth->kind = ADDRXLAT_PGT;
-	meth->target_as = ADDRXLAT_MACHPHYSADDR;
-
-	if (ctl->popt.val[OPT_rootpgt].set)
-		meth->param.pgt.root = ctl->popt.val[OPT_rootpgt].fulladdr;
+	if (opt_isset(ctl->popt, rootpgt))
+		meth->param.pgt.root = ctl->popt.rootpgt;
 	else {
 		status = get_linux_pgtroot(ctl, &meth->param.pgt.root);
 		if (status != ADDRXLAT_OK)
 			return status;
 	}
 
-	meth->param.pgt.pte_mask =
-		opt_num_default(&ctl->popt, OPT_pte_mask, 0);
-	meth->param.pgt.pf = aarch64_pf;
+	status = sys_set_physmaps(ctl, PHYSADDR_MASK);
+	if (status != ADDRXLAT_OK)
+		return status;
 
-	status = get_number(ctl->ctx, "VA_BITS",
-			    &va_bits);
+	add_linux_linear_map(ctl);
+	clear_error(ctl->ctx);
+
+	return ADDRXLAT_OK;
+}
+
+/** Determine the number of virtual address bits
+ * @param ctl  Initialization data.
+ * @returns    Error status.
+ */
+static addrxlat_status
+determine_virt_bits(struct os_init_data *ctl)
+{
+	addrxlat_addr_t num;
+	addrxlat_status status;
+
+	if (opt_isset(ctl->popt, virt_bits))
+		return ADDRXLAT_OK;
+
+	if (ctl->os_type == OS_LINUX) {
+		status = get_number(ctl->ctx, "TCR_EL1_T1SZ", &num);
+		if (status == ADDRXLAT_OK) {
+			num = 64 - num;
+		} else if (status == ADDRXLAT_ERR_NODATA) {
+			clear_error(ctl->ctx);
+			status = get_number(ctl->ctx, "VA_BITS", &num);
+		}
+	} else
+		status = set_error(ctl->ctx, ADDRXLAT_ERR_NOTIMPL,
+				   "Unsupported OS type");
+
 	if (status != ADDRXLAT_OK)
 		return set_error(ctl->ctx, status,
 				 "Cannot determine VA_BITS");
 
-	if (ctl->popt.val[OPT_levels].set) {
-		long levels = ctl->popt.val[OPT_levels].num;
-		if (levels < 3 || levels > 5)
-			return bad_paging_levels(ctl->ctx, levels);
-		meth->param.pgt.pf.nfields = levels + 1;
-	} else
-		meth->param.pgt.pf.nfields = ((va_bits - 12) / 9) + 1;
+	ctl->popt.virt_bits = num;
+	ctl->popt.isset[ADDRXLAT_OPT_virt_bits] = true;
+	return ADDRXLAT_OK;
+}
 
-	/* layout depends on current value of va_bits */
-	aarch64_layout_generic[0].last =  ~(-(1ull) << (va_bits));
-	aarch64_layout_generic[1].first =  (-(1ull) << (va_bits));
+/** Initialize the page table translation method.
+ * @param ctl      Initialization data.
+ */
+static void
+init_pgt_meth(struct os_init_data *ctl)
+{
+	addrxlat_meth_t *meth = &ctl->sys->meth[ADDRXLAT_SYS_METH_PGT];
+	addrxlat_param_pgt_t *pgt = &meth->param.pgt;
+	unsigned field_bits;
+	unsigned page_bits;
+	unsigned num_bits;
 
-	status = sys_set_layout(ctl, ADDRXLAT_SYS_MAP_HW,
-				aarch64_layout_generic);
+	meth->kind = ADDRXLAT_PGT;
+	meth->target_as = ADDRXLAT_MACHPHYSADDR;
+
+	pgt->root.as = ADDRXLAT_NOADDR;
+	pgt->pte_mask = 0;
+	pgt->pf.pte_format = ADDRXLAT_PTE_AARCH64;
+
+	pgt->pf.nfields = 0;
+	field_bits = page_bits = ctl->popt.page_shift;
+	num_bits = ctl->popt.virt_bits;
+	while (num_bits) {
+		pgt->pf.fieldsz[pgt->pf.nfields++] = field_bits;
+		num_bits -= field_bits;
+		field_bits = page_bits - 3;
+		if (field_bits > num_bits)
+			field_bits = num_bits;
+	}
+
+	ctl->sys->meth[ADDRXLAT_SYS_METH_UPGT] = *meth;
+}
+
+/** Initialize the hardware translation map.
+ * @param ctl  Initialization data.
+ * @returns    Error status.
+ *
+ * Set up a generic aarch64 layout with two subranges.
+ * The number of virtual address bits must be determined before calling
+ * this function.
+ */
+static addrxlat_status
+init_hw_map(struct os_init_data *ctl)
+{
+	addrxlat_addr_t endoff = ADDR_MASK(ctl->popt.virt_bits);
+	struct sys_region layout[] = {
+		/* bottom VA range: user space */
+		{  0,  endoff,
+		   ADDRXLAT_SYS_METH_UPGT },
+
+		/* top VA range: kernel space */
+		{  VIRTADDR_MAX - endoff,  VIRTADDR_MAX,
+		   ADDRXLAT_SYS_METH_PGT },
+
+		SYS_REGION_END
+	};
+
+	return sys_set_layout(ctl, ADDRXLAT_SYS_MAP_HW, layout);
+}
+
+/** Initialize a translation map for an aarch64 OS.
+ * @param ctl  Initialization data.
+ * @returns    Error status.
+ */
+addrxlat_status
+sys_aarch64(struct os_init_data *ctl)
+{
+	unsigned long va_min_bits;
+	addrxlat_map_t *map;
+	addrxlat_status status;
+
+	if (!opt_isset(ctl->popt, page_shift))
+		return set_error(ctl->ctx, ADDRXLAT_ERR_NODATA,
+				 "Cannot determine page size");
+
+	status = determine_virt_bits(ctl);
+	if (status != ADDRXLAT_OK)
+		return status;
+
+	va_min_bits = 16;
+	if (va_min_bits <= ctl->popt.page_shift)
+		va_min_bits = ctl->popt.page_shift + 1;
+	if (ctl->popt.virt_bits < va_min_bits ||
+	    ctl->popt.virt_bits > VA_MAX_BITS)
+		return bad_virt_bits(ctl->ctx, ctl->popt.virt_bits);
+
+	init_pgt_meth(ctl);
+	status = init_hw_map(ctl);
 	if (status != ADDRXLAT_OK)
 		return status;
 
@@ -315,27 +444,8 @@ map_linux_aarch64(struct os_init_data *ctl)
 				 "Cannot duplicate hardware mapping");
 	ctl->sys->map[ADDRXLAT_SYS_MAP_KV_PHYS] = map;
 
-	status = sys_set_physmaps(ctl, PHYSADDR_MASK);
-	if (status != ADDRXLAT_OK)
-		return status;
-
-	return ADDRXLAT_OK;
-}
-
-
-/** Initialize a translation map for an aarch64 OS.
- * @param ctl  Initialization data.
- * @returns    Error status.
- */
-addrxlat_status
-sys_aarch64(struct os_init_data *ctl)
-{
-	switch (ctl->osdesc->type) {
-	case ADDRXLAT_OS_LINUX:
+	if (ctl->os_type == OS_LINUX)
 		return map_linux_aarch64(ctl);
 
-	default:
-		return set_error(ctl->ctx, ADDRXLAT_ERR_NOTIMPL,
-				 "OS type not implemented");
-	}
+	return ADDRXLAT_OK;
 }

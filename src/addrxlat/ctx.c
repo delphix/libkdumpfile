@@ -107,7 +107,7 @@ touch_cache_slot(struct read_cache *cache, struct read_cache_slot *slot)
  * @param[out] pbuf  Buffer (updated on success).
  * @returns          Error status.
  */
-static addrxlat_status
+addrxlat_status
 get_cache_buf(addrxlat_ctx_t *ctx, const addrxlat_fulladdr_t *addr,
 	      addrxlat_buffer_t **pbuf)
 {
@@ -132,6 +132,7 @@ get_cache_buf(addrxlat_ctx_t *ctx, const addrxlat_fulladdr_t *addr,
 
 	/* Get the new page */
 	slot->buffer.addr = *addr;
+	slot->buffer.ptr = NULL;
 	status = ctx->cb.get_page(ctx->cb.data, &slot->buffer);
 	if (status != ADDRXLAT_OK) {
 		slot->buffer.size = 0;
@@ -139,6 +140,10 @@ get_cache_buf(addrxlat_ctx_t *ctx, const addrxlat_fulladdr_t *addr,
 	}
 
  out:
+	if (!slot->buffer.ptr)
+		return set_error(ctx, ADDRXLAT_ERR_NODATA,
+				 "Infinite read recursion");
+
 	*pbuf = &slot->buffer;
 	touch_cache_slot(&ctx->cache, slot);
 	return ADDRXLAT_OK;
@@ -254,12 +259,10 @@ addrxlat_ctx_get_ecb(addrxlat_ctx_t *ctx)
 	return &ctx->cb;
 }
 
-/** Get the (string) name of an address space.
- * @param as  Address space.
- * @returns   The (human-readable) name of the address space.
- */
-static const char *
-addrspace_name(addrxlat_addrspace_t as)
+DEFINE_ALIAS(addrspace_name);
+
+const char *
+addrxlat_addrspace_name(addrxlat_addrspace_t as)
 {
 	switch (as) {
 	case ADDRXLAT_KPHYSADDR:	return "KPHYSADDR";
@@ -332,7 +335,7 @@ read32(addrxlat_step_t *step, const addrxlat_fulladdr_t *addr, uint32_t *val,
 
 	if (!ctx->cb.get_page)
 		return set_error(ctx, ADDRXLAT_ERR_NODATA, read_nocb_fmt,
-				 addrspace_name(addr->as));
+				 internal_addrspace_name(addr->as));
 
 	if (ctx->cb.read_caps & ADDRXLAT_CAPS(addr->as)) {
 		status = do_read32(ctx, addr, val);
@@ -350,7 +353,7 @@ read32(addrxlat_step_t *step, const addrxlat_fulladdr_t *addr, uint32_t *val,
 
 	if (status != ADDRXLAT_OK)
 		return set_error(ctx, status, read_err_fmt, 32, what,
-				 addrspace_name(addr->as), addr->addr);
+				 internal_addrspace_name(addr->as), addr->addr);
 
 	return ADDRXLAT_OK;
 }
@@ -404,7 +407,7 @@ read64(addrxlat_step_t *step, const addrxlat_fulladdr_t *addr, uint64_t *val,
 
 	if (!ctx->cb.get_page)
 		return set_error(ctx, ADDRXLAT_ERR_NODATA, read_nocb_fmt,
-				 addrspace_name(addr->as));
+				 internal_addrspace_name(addr->as));
 
 	if (ctx->cb.read_caps & ADDRXLAT_CAPS(addr->as)) {
 		status = do_read64(ctx, addr, val);
@@ -422,7 +425,7 @@ read64(addrxlat_step_t *step, const addrxlat_fulladdr_t *addr, uint64_t *val,
 
 	if (status != ADDRXLAT_OK)
 		return set_error(ctx, status, read_err_fmt, 64, what,
-				 addrspace_name(addr->as), addr->addr);
+				 internal_addrspace_name(addr->as), addr->addr);
 
 	return ADDRXLAT_OK;
 }

@@ -1,5 +1,6 @@
 from distutils.core import setup, Extension
 import libtoolize
+import disthelpers
 import os
 
 try:
@@ -11,7 +12,7 @@ cfg = ConfigParser()
 cfg.read('setup.cfg')
 srcdir = cfg.get('kdumpfile', 'srcdir')
 top_builddir = cfg.get('kdumpfile', 'top_builddir')
-include_dir=os.path.join(top_builddir, 'include'),
+include_dir=os.path.join(top_builddir, 'include')
 addrxlat_la = os.path.join(
     top_builddir, 'src', 'addrxlat', 'libaddrxlat.la')
 kdumpfile_la = os.path.join(
@@ -45,5 +46,6 @@ setup(name='libkdumpfile',
       cmdclass={
           'build_ext': libtoolize.build_ext,
           'install_lib': libtoolize.install_lib,
+          'get_build_platlib': disthelpers.get_build_platlib,
       },
 )

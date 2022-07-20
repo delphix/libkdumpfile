@@ -21,6 +21,8 @@
 AM_CPPFLAGS = -I$(top_builddir)/include
 LDADD = libtestutil.a
 
+export SIZEOF_OFF_T = @SIZEOF_OFF_T@
+
 libtestutil_a_SOURCES = \
 	data.c \
 	param.c \
@@ -54,16 +56,21 @@ elf_prstatus_mod_x86_64_LDADD = \
 	$(top_builddir)/src/kdumpfile/libkdumpfile.la
 err_addrxlat_LDADD = \
 	$(top_builddir)/src/addrxlat/libaddrxlat.la
+fdset_LDADD = \
+	$(LDADD) \
+	$(top_builddir)/src/kdumpfile/libkdumpfile.la
 
 mkdiskdump_CFLAGS = \
 	$(ZLIB_CFLAGS) \
 	$(LZO_CFLAGS) \
-	$(SNAPPY_CFLAGS)
+	$(SNAPPY_CFLAGS) \
+	$(ZSTD_CFLAGS)
 mkdiskdump_LDADD = \
 	$(LDADD) \
 	$(ZLIB_LIBS) \
 	$(LZO_LIBS) \
-	$(SNAPPY_LIBS)
+	$(SNAPPY_LIBS) \
+	$(ZSTD_LIBS)
 
 mklkcd_CFLAGS = \
 	$(ZLIB_CFLAGS)
@@ -113,6 +120,7 @@ check_PROGRAMS = \
 	dumpdata \
 	elf-prstatus-mod-x86_64 \
 	err-addrxlat \
+	fdset \
 	mkdiskdump \
 	mkelf \
 	mklkcd \
@@ -138,6 +146,7 @@ test_scripts = \
 	addrmap-overlap-begin \
 	addrmap-overlap-end \
 	addrmap-reduce \
+	addrxlat-null \
 	addrxlat-identity \
 	addrxlat-pfn32 \
 	addrxlat-pfn64 \
@@ -172,8 +181,10 @@ test_scripts = \
 	diskdump-basic-zlib \
 	diskdump-basic-lzo \
 	diskdump-basic-snappy \
+	diskdump-basic-zstd \
 	diskdump-multiread \
 	diskdump-excluded \
+	diskdump-split \
 	early-version-code \
 	elf-empty-aarch64 \
 	elf-empty-i386 \
@@ -221,6 +232,7 @@ test_scripts = \
 	sys-xlat-x86_64-linux \
 	sys-xlat-x86_64-linux-xen \
 	xlatmap-check \
+	xlat-os-aarch64-none \
 	xlat-os-ia32-none \
 	xlat-os-ia32-pae-none \
 	xlat-os-s390x-2l \
@@ -231,6 +243,8 @@ test_scripts = \
 	xlat-linux-aarch64-5.2-va39 \
 	xlat-linux-aarch64-5.8-va39 \
 	xlat-linux-aarch64-5.8-va48 \
+	xlat-linux-aarch64-5.8-va48-nover \
+	xlat-linux-aarch64-5.16-64k \
 	xlat-linux-ia32 \
 	xlat-linux-ia32-pae \
 	xlat-linux-ppc64-64k \
@@ -316,9 +330,15 @@ dist_check_DATA = \
 	multixlat-same.expect \
 	diskdump-excluded.data \
 	diskdump-excluded.expect \
+	diskdump-split.data \
+	diskdump-split.expect \
+	diskdump-split.expect.1 \
+	diskdump-split.expect.2 \
+	diskdump-split.expect.3 \
 	sys-xlat-x86_64-linux.expect \
 	sys-xlat-x86_64-linux-xen.expect \
 	xlatmap.expect \
+	xlat-os-aarch64-none.expect \
 	xlat-os-ia32-none.expect \
 	xlat-os-ia32-pae-none.expect \
 	xlat-os-s390x-2l.data \
@@ -330,12 +350,21 @@ dist_check_DATA = \
 	xlat-os-s390x-5l.data \
 	xlat-os-s390x-5l.expect \
 	xlat-os-x86_64-none.expect \
+	xlat-linux-aarch64-5.2-va39.data \
 	xlat-linux-aarch64-5.2-va39.expect \
 	xlat-linux-aarch64-5.2-va39.sym \
+	xlat-linux-aarch64-5.8-va39.data \
 	xlat-linux-aarch64-5.8-va39.expect \
 	xlat-linux-aarch64-5.8-va39.sym \
+	xlat-linux-aarch64-5.8-va48.data \
 	xlat-linux-aarch64-5.8-va48.expect \
 	xlat-linux-aarch64-5.8-va48.sym \
+	xlat-linux-aarch64-5.8-va48-nover.data \
+	xlat-linux-aarch64-5.8-va48-nover.expect \
+	xlat-linux-aarch64-5.8-va48-nover.sym \
+	xlat-linux-aarch64-5.16-64k.data \
+	xlat-linux-aarch64-5.16-64k.expect \
+	xlat-linux-aarch64-5.16-64k.sym \
 	xlat-linux-ia32.data \
 	xlat-linux-ia32.expect \
 	xlat-linux-ia32-pae.data \
@@ -467,6 +496,7 @@ TESTS = $(test_scripts) \
 	clearattr \
 	custom-meth \
 	err-addrxlat \
+	fdset \
 	nometh \
 	subattr \
 	thread-errstr \

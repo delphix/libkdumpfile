@@ -44,7 +44,6 @@ static kdump_ctx_t *
 alloc_ctx(void)
 {
 	kdump_ctx_t *ctx;
-	unsigned i;
 
 	ctx = calloc(1, sizeof (kdump_ctx_t) + ERRBUF);
 	if (!ctx)
@@ -161,6 +160,7 @@ kdump_new(void)
 		{ GKI_mmap_cache_misses, 0 },
 		{ GKI_read_cache_hits, 0 },
 		{ GKI_read_cache_misses, 0 },
+		{ GKI_num_files, 0 },
 	};
 
 	kdump_ctx_t *ctx;
@@ -177,11 +177,14 @@ kdump_new(void)
 
 	ctx->dict = attr_dict_new(ctx->shared);
 	if (!ctx->dict)
+		goto err_shared;
+
+	if (create_addrxlat_attrs(ctx->dict) != KDUMP_OK)
 		goto err_dict;
 
 	ctx->xlat = xlat_new();
 	if (!ctx->xlat)
-		goto err_xlat;
+		goto err_dict;
 	list_add(&ctx->xlat_list, &ctx->xlat->ctx);
 
 	for (i = 0; i < ARRAY_SIZE(numeric_attrs); ++i)
@@ -190,9 +193,9 @@ kdump_new(void)
 
 	return ctx;
 
- err_xlat:
-	attr_dict_decref(ctx->dict);
  err_dict:
+	attr_dict_decref(ctx->dict);
+ err_shared:
 	shared_decref(ctx->shared);
  err:
 	addrxlat_ctx_decref(ctx->xlatctx);
@@ -201,18 +204,18 @@ kdump_new(void)
 }
 
 static bool
-clone_xlat_attrs(kdump_ctx_t *dest, const kdump_ctx_t *orig)
+clone_xlat_attrs(struct attr_dict *dest, const struct attr_dict *orig)
 {
 	static const enum global_keyidx globals[] = {
-		GKI_xlat_opts_pre,
-		GKI_xlat_opts_post,
+		GKI_dir_xlat_default,
+		GKI_dir_xlat_force,
 		GKI_ostype,
 	};
 
 	int i;
 	for (i = 0; i < ARRAY_SIZE(globals); ++i) {
-		struct attr_data *attr = dgattr(orig->dict, globals[i]);
-		if (! clone_attr_path(dest->dict, attr))
+		struct attr_data *attr = dgattr(orig, globals[i]);
+		if (!clone_attr_path(dest, attr))
 			return false;
 	}
 	return true;
@@ -262,7 +265,7 @@ kdump_clone(const kdump_ctx_t *orig, unsigned long flags)
 		ctx->xlat = xlat_clone(orig->xlat);
 		if (!ctx->xlat)
 			goto err_dict;
-		if (!clone_xlat_attrs(ctx, orig))
+		if (!clone_xlat_attrs(ctx->dict, orig->dict))
 			goto err_xlat;
 	} else {
 		ctx->xlat = orig->xlat;
@@ -284,6 +287,33 @@ kdump_clone(const kdump_ctx_t *orig, unsigned long flags)
 	rwlock_unlock(&orig->shared->lock);
 	free(ctx);
 	return NULL;
+}
+
+void
+kdump_free(kdump_ctx_t *ctx)
+{
+	struct kdump_shared *shared = ctx->shared;
+	int slot;
+
+	rwlock_wrlock(&shared->lock);
+
+	for (slot = 0; slot < PER_CTX_SLOTS; ++slot)
+		if (shared->per_ctx_size[slot])
+			free(ctx->data[slot]);
+
+	addrxlat_ctx_decref(ctx->xlatctx);
+
+	list_del(&ctx->xlat_list);
+	xlat_decref(ctx->xlat);
+
+	attr_dict_decref(ctx->dict);
+
+	list_del(&ctx->list);
+	if (shared_decref_locked(shared))
+		rwlock_unlock(&shared->lock);
+
+	err_cleanup(&ctx->err);
+	free(ctx);
 }
 
 const char *

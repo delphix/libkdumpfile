@@ -132,12 +132,21 @@ check_attr(kdump_ctx_t *ctx, char *key, const kdump_attr_t *expect, int chkval)
 	return TEST_OK;
 }
 
+static inline int
+bit_value(const struct number_array *nums, unsigned bit)
+{
+	unsigned off = bit >> 3;
+	return off < nums->n
+		? nums->val[off] & (1ULL << (bit & 7))
+		: 0;
+}
 static int
 check_attr_bmp(kdump_ctx_t *ctx, char *key, const struct number_array *expect)
 {
 	kdump_attr_t attr;
 	unsigned char bits[expect->n];
 	kdump_status status;
+	kdump_addr_t bit;
 	unsigned i;
 
 	printf("Checking %s... ", key);
@@ -175,6 +184,51 @@ check_attr_bmp(kdump_ctx_t *ctx, char *key, const struct number_array *expect)
 		}
 	}
 
+	bit = 0;
+	while (bit < (expect->n << 3)) {
+		kdump_addr_t clear = bit;
+		kdump_addr_t set = bit;
+		kdump_addr_t next;
+
+		status = kdump_bmp_find_clear(attr.val.bitmap, &clear);
+		if (status != KDUMP_OK) {
+			puts("FAILED");
+			fprintf(stderr, "Cannot find %s bit at %" KDUMP_PRIuADDR ": %s\n",
+				"clear", bit, kdump_bmp_get_err(attr.val.bitmap));
+			return TEST_FAIL;
+
+		}
+
+		status = kdump_bmp_find_set(attr.val.bitmap, &set);
+		if (status == KDUMP_ERR_NODATA) {
+			set = expect->n << 3;
+		} else if (status != KDUMP_OK) {
+			puts("FAILED");
+			fprintf(stderr, "Cannot find %s bit at %" KDUMP_PRIuADDR ": %s\n",
+				"set", bit, kdump_bmp_get_err(attr.val.bitmap));
+			return TEST_FAIL;
+
+		}
+
+		for (next = bit; next < clear; ++next)
+			if (bit_value(expect, next) == 0) {
+				puts("FAILED");
+				fprintf(stderr, "%s %s bit %" KDUMP_PRIuADDR " not found!\n",
+					key, "clear", next);
+				return TEST_FAIL;
+			}
+
+		for (next = bit; next < set; ++next)
+			if (bit_value(expect, next) != 0) {
+				puts("FAILED");
+				fprintf(stderr, "%s %s bit %" KDUMP_PRIuADDR " not found!\n",
+					key, "set", next);
+				return TEST_FAIL;
+			}
+
+		bit = clear > set ? clear : set;
+	}
+
 	puts("OK");
 	return TEST_OK;
 }
@@ -185,7 +239,6 @@ check_attr_blob(kdump_ctx_t *ctx, char *key, const struct blob *expect)
 	kdump_attr_t attr;
 	unsigned char *data;
 	size_t size;
-	kdump_status status;
 	size_t i;
 
 	printf("Checking %s... ", key);
@@ -217,7 +270,7 @@ check_attr_blob(kdump_ctx_t *ctx, char *key, const struct blob *expect)
 		if (data[i] != expect->data[i]) {
 			kdump_blob_unpin(attr.val.blob);
 			puts("FAILED");
-			fprintf(stderr, "%s value mismatch at index %u: ",
+			fprintf(stderr, "%s value mismatch at index %zu: ",
 				key, i);
 			fprintf(stderr, "expect 0x%02x, got 0x%02x\n",
 				expect->data[i], data[i]);
@@ -353,7 +406,7 @@ check_attrs(FILE *parm, kdump_ctx_t *ctx)
 }
 
 static int
-check_attrs_fd(FILE *parm, int dumpfd)
+check_attrs_fds(FILE *parm, unsigned nfiles, const int *dumpfds)
 {
 	kdump_ctx_t *ctx;
 	kdump_status res;
@@ -365,7 +418,7 @@ check_attrs_fd(FILE *parm, int dumpfd)
 		return TEST_ERR;
 	}
 
-	res = kdump_set_number_attr(ctx, KDUMP_ATTR_FILE_FD, dumpfd);
+	res = kdump_open_fdset(ctx, nfiles, dumpfds);
 	if (res != KDUMP_OK) {
 		fprintf(stderr, "Cannot open dump: %s\n", kdump_get_err(ctx));
 		rc = TEST_ERR;
@@ -376,29 +429,39 @@ check_attrs_fd(FILE *parm, int dumpfd)
 	return rc;
 }
 
+static int
+check_attr_args(unsigned nfiles, char **argv)
+{
+	unsigned i;
+	int fds[nfiles];
+	int rc;
+
+	for (i = 0; i < nfiles; ++i) {
+		fds[i] = open(argv[i], O_RDONLY);
+		if (fds[i] < 0) {
+			perror(argv[i]);
+			return TEST_ERR;
+		}
+	}
+
+	rc = check_attrs_fds(stdin, nfiles, fds);
+
+	for (i = 0; i < nfiles; ++i)
+		if (close(fds[i]) < 0) {
+			perror("Cannot close dump file");
+			rc = TEST_ERR;
+		}
+
+	return rc;
+}
+
 int
 main(int argc, char **argv)
 {
-	int fd;
-	int rc;
-
-	if (argc != 2) {
-		fprintf(stderr, "Usage: %s <dump>\n", argv[0]);
+	if (argc < 2) {
+		fprintf(stderr, "Usage: %s <dump>[...]\n", argv[0]);
 		return TEST_ERR;
 	}
 
-	fd = open(argv[1], O_RDONLY);
-	if (fd < 0) {
-		perror("Cannot open dump file");
-		return TEST_ERR;
-	}
-
-	rc = check_attrs_fd(stdin, fd);
-
-	if (close(fd) != 0) {
-		perror("Cannot close dump file");
-		rc = TEST_ERR;
-	}
-
-	return rc;
+	return check_attr_args(argc - 1, argv + 1);
 }

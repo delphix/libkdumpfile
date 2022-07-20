@@ -77,9 +77,98 @@ addrxlat_sys_decref(addrxlat_sys_t *sys)
 	return refcnt;
 }
 
+/** Parse a single option.
+ * @param popt   Parsed options.
+ * @param opt    Option.
+ * @returns      @c true if option was parsed, @c false if option is unknown.
+ */
+static bool
+parse_opt(struct parsed_opts *popt, const addrxlat_opt_t *opt)
+{
+	switch (opt->idx) {
+	case ADDRXLAT_OPT_NULL:
+		break;
+
+	case ADDRXLAT_OPT_arch:
+		popt->arch = opt->val.str;
+		break;
+
+	case ADDRXLAT_OPT_os_type:
+		popt->os_type = opt->val.str;
+		break;
+
+	case ADDRXLAT_OPT_version_code:
+		popt->version_code = opt->val.num;
+		break;
+
+	case ADDRXLAT_OPT_phys_bits:
+		popt->phys_bits = opt->val.num;
+		break;
+
+	case ADDRXLAT_OPT_virt_bits:
+		popt->virt_bits = opt->val.num;
+		break;
+
+	case ADDRXLAT_OPT_page_shift:
+		popt->page_shift = opt->val.num;
+		break;
+
+	case ADDRXLAT_OPT_phys_base:
+		popt->phys_base = opt->val.addr;
+		break;
+
+	case ADDRXLAT_OPT_rootpgt:
+		popt->rootpgt = opt->val.fulladdr;
+		break;
+
+	case ADDRXLAT_OPT_xen_p2m_mfn:
+		popt->xen_p2m_mfn = opt->val.num;
+		break;
+
+	case ADDRXLAT_OPT_xen_xlat:
+		popt->xen_xlat = opt->val.num;
+		break;
+
+	default:
+		return false;
+	}
+
+	return true;
+}
+
+/** OS map option parser.
+ * @param popt  Parsed options.
+ * @param ctx   Translation context (for error handling).
+ * @param optc  Number of options in @p opts.
+ * @param opts  Options.
+ * @returns     Error status.
+ */
+static addrxlat_status
+parse_opts(struct parsed_opts *popt, addrxlat_ctx_t *ctx,
+	   unsigned optc, const addrxlat_opt_t *opts)
+{
+	addrxlat_optidx_t idx;
+
+	for (idx = 0; idx < ADDRXLAT_OPT_NUM; ++idx)
+		popt->isset[idx] = false;
+
+	while (optc) {
+		if (!parse_opt(popt, opts))
+			return set_error(ctx, ADDRXLAT_ERR_NOTIMPL,
+					 "Unknown option: %u",
+					 (unsigned) opts->idx);
+		popt->isset[opts->idx] = true;
+
+		++opts;
+		--optc;
+	}
+
+	return ADDRXLAT_OK;
+}
+
 addrxlat_status
 addrxlat_sys_os_init(addrxlat_sys_t *sys, addrxlat_ctx_t *ctx,
-		     const addrxlat_osdesc_t *osdesc)
+		     unsigned optc, const addrxlat_opt_t *opts)
 {
 	struct os_init_data ctl;
 	sys_arch_fn *arch_fn;
@@ -87,18 +176,25 @@ addrxlat_sys_os_init(addrxlat_sys_t *sys, addrxlat_ctx_t *ctx,
 
 	clear_error(ctx);
 
-	if (!strcmp(osdesc->arch, "x86_64"))
+	status = parse_opts(&ctl.popt, ctx, optc, opts);
+	if (status != ADDRXLAT_OK)
+		return status;
+
+	if (!opt_isset(ctl.popt, arch))
+		return set_error(ctx, ADDRXLAT_ERR_NODATA,
+				 "Cannot determine architecture");
+	if (!strcmp(ctl.popt.arch, "x86_64"))
 		arch_fn = sys_x86_64;
-	else if ((osdesc->arch[0] == 'i' &&
-		  (osdesc->arch[1] >= '3' && osdesc->arch[1] <= '6') &&
-		  !strcmp(osdesc->arch + 2, "86")) ||
-		 !strcmp(osdesc->arch, "ia32"))
+	else if ((ctl.popt.arch[0] == 'i' &&
+		  (ctl.popt.arch[1] >= '3' && ctl.popt.arch[1] <= '6') &&
+		  !strcmp(ctl.popt.arch + 2, "86")) ||
+		 !strcmp(ctl.popt.arch, "ia32"))
 		arch_fn = sys_ia32;
-	else if (!strcmp(osdesc->arch, "s390x"))
+	else if (!strcmp(ctl.popt.arch, "s390x"))
 		arch_fn = sys_s390x;
-	else if (!strcmp(osdesc->arch, "ppc64"))
+	else if (!strcmp(ctl.popt.arch, "ppc64"))
 		arch_fn = sys_ppc64;
-	else if (!strcmp(osdesc->arch, "aarch64"))
+	else if (!strcmp(ctl.popt.arch, "aarch64"))
 		arch_fn = sys_aarch64;
 	else
 		return set_error(ctx, ADDRXLAT_ERR_NOTIMPL,
@@ -108,11 +204,13 @@ addrxlat_sys_os_init(addrxlat_sys_t *sys, addrxlat_ctx_t *ctx,
 
 	ctl.sys = sys;
 	ctl.ctx = ctx;
-	ctl.osdesc = osdesc;
-
-	status = parse_opts(&ctl.popt, ctx, osdesc->opts);
-	if (status != ADDRXLAT_OK)
-		return status;
+	ctl.os_type = OS_UNKNOWN;
+	if (opt_isset(ctl.popt, os_type)) {
+		if (!strcmp(ctl.popt.os_type, "linux"))
+			ctl.os_type = OS_LINUX;
+		else if (!strcmp(ctl.popt.os_type, "xen"))
+			ctl.os_type = OS_XEN;
+	}
 
 	return arch_fn(&ctl);
 }

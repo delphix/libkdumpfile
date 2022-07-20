@@ -5,10 +5,10 @@
 # using page table content alone
 #
 
-arch=x86_64
-ostype=1
-osver=0
-# Page encryption indicated by bit 47 => mask is 0x800000000000
-opts="phys_base=0x1691000000 pte_mask=140737488355328"
+opts=(
+    arch=x86_64
+    ostype=linux
+    phys_base=0x1691000000
+)
 
 . "$srcdir"/xlat-os-common

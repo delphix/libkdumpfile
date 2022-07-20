@@ -105,7 +105,7 @@ PyDoc_STRVAR(attr_convert__doc__,
 static long
 Number_AsLong(PyObject *num)
 {
-	unsigned long long result;
+	long result;
 
 	if (PyLong_Check(num))
 		return PyLong_AsLong(num);
@@ -4174,7 +4174,7 @@ sys_richcompare(PyObject *v, PyObject *w, int op)
 }
 
 PyDoc_STRVAR(sys_os_init__doc__,
-"SYS.os_init(ctx, arch[, type[, ver[, opts]]]) -> status\n\
+"SYS.os_init(ctx, arch=None, os_type=None, version_code=None, phys_bits=None, virt_bits=None, page_shift=None, phys_base=None, rootpgt=None, xen_p2m_mfn=None, xen_xlat=None) -> status\n\
 \n\
 Set up a translation system for a pre-defined operating system.");
 
@@ -4183,29 +4183,110 @@ sys_os_init(PyObject *_self, PyObject *args, PyObject *kwargs)
 {
 	sys_object *self = (sys_object*)_self;
 	static char *keywords[] = {
-		"ctx", "arch", "type", "ver", "opts",
+		"ctx",
+		"arch",
+		"os_type",
+		"version_code",
+		"phys_bits",
+		"virt_bits",
+		"page_shift",
+		"phys_base",
+		"rootpgt",
+		"xen_p2m_mfn",
+		"xen_xlat",
 		NULL
 	};
 	PyObject *ctxobj;
+	PyObject *arch, *type, *ver, *page_shift, *phys_base,
+		*rootpgt, *xen_p2m_mfn, *xen_xlat, *phys_bits, *virt_bits;
 	addrxlat_ctx_t *ctx;
-	addrxlat_osdesc_t osdesc;
-	long type;
+	addrxlat_opt_t opts[ADDRXLAT_OPT_NUM], *p;
 	addrxlat_status status;
 
-	type = ADDRXLAT_OS_UNKNOWN;
-	osdesc.ver = 0;
-	osdesc.opts = NULL;
-	if (!PyArg_ParseTupleAndKeywords(args, kwargs, "Os|lkz:os_init",
-					 keywords, &ctxobj, &osdesc.arch,
-					 &type, &osdesc.ver, &osdesc.opts))
+	arch = type = ver = page_shift = phys_base = rootpgt =
+		xen_p2m_mfn = xen_xlat = phys_bits = virt_bits = Py_None;
+	if (!PyArg_ParseTupleAndKeywords(
+		    args, kwargs, "O|OOOOOOOOOO:os_init", keywords,
+		    &ctxobj, &arch, &type, &ver, &phys_bits, &virt_bits,
+		    &page_shift, &phys_base, &rootpgt, &xen_p2m_mfn,
+		    &xen_xlat))
 		return NULL;
 
 	ctx = ctx_AsPointer(ctxobj);
 	if (!ctx)
 		return NULL;
 
-	osdesc.type = type;
-	status = addrxlat_sys_os_init(self->sys, ctx, &osdesc);
+	p = opts;
+
+	if (arch != Py_None) {
+		const char *str = Text_AsUTF8(arch);
+		if (!str)
+			return NULL;
+		addrxlat_opt_arch(p, str);
+		++p;
+	}
+	if (type != Py_None) {
+		const char *str = Text_AsUTF8(type);
+		if (!str)
+			return NULL;
+		addrxlat_opt_os_type(p, str);
+		++p;
+	}
+	if (ver != Py_None) {
+		addrxlat_opt_version_code(
+			p, Number_AsUnsignedLongLong(ver));
+		if (PyErr_Occurred())
+			return NULL;
+		++p;
+	}
+	if (phys_bits != Py_None) {
+		addrxlat_opt_phys_bits(
+			p, Number_AsUnsignedLongLong(phys_bits));
+		if (PyErr_Occurred())
+			return NULL;
+		++p;
+	}
+	if (virt_bits != Py_None) {
+		addrxlat_opt_virt_bits(
+			p, Number_AsUnsignedLongLong(virt_bits));
+		if (PyErr_Occurred())
+			return NULL;
+		++p;
+	}
+	if (page_shift != Py_None) {
+		addrxlat_opt_page_shift(
+			p, Number_AsUnsignedLongLong(page_shift));
+		if (PyErr_Occurred())
+			return NULL;
+		++p;
+	}
+	if (phys_base != Py_None) {
+		addrxlat_opt_phys_base(
+			p, Number_AsUnsignedLongLong(phys_base));
+		if (PyErr_Occurred())
+			return NULL;
+		++p;
+	}
+	if (rootpgt != Py_None) {
+		addrxlat_fulladdr_t *faddr = fulladdr_AsPointer(rootpgt);
+		if (!faddr)
+			return NULL;
+		addrxlat_opt_rootpgt(p, faddr);
+		++p;
+	}
+	if (xen_p2m_mfn != Py_None) {
+		addrxlat_opt_xen_p2m_mfn(
+			p, Number_AsUnsignedLongLong(xen_p2m_mfn));
+		if (PyErr_Occurred())
+			return NULL;
+		++p;
+	}
+	if (xen_xlat != Py_None && Number_AsLong(xen_xlat)) {
+		addrxlat_opt_xen_xlat(p, 1);
+		++p;
+	}
+
+	status = addrxlat_sys_os_init(self->sys, ctx, p - opts, opts);
 	return ctx_status_result(ctxobj, status);
 }
 
@@ -5422,6 +5503,30 @@ _addrxlat_strerror(PyObject *self, PyObject *args, PyObject *kwargs)
 	return Text_FromUTF8(addrxlat_strerror(status));
 }
 
+PyDoc_STRVAR(_addrxlat_addrspace_name__doc__,
+"addrspace_name(addrspace) -> name\n\
+\n\
+Return the name of an address space constant.");
+
+/** Wrapper for @ref addrxlat_addrspace_name
+ * @param self    module object
+ * @param args    positional arguments
+ * @param kwargs  keyword arguments
+ * @returns       error message string (or @c NULL on failure)
+ */
+static PyObject *
+_addrxlat_addrspace_name(PyObject *self, PyObject *args, PyObject *kwargs)
+{
+	static char *keywords[] = {"addrspace", NULL};
+	long addrspace;
+
+	if (!PyArg_ParseTupleAndKeywords(args, kwargs, "l",
+					 keywords, &addrspace))
+		return NULL;
+
+	return Text_FromUTF8(addrxlat_addrspace_name(addrspace));
+}
+
 PyDoc_STRVAR(_addrxlat_CAPS__doc__,
 "CAPS(addrspace) -> capability bitmask\n\
 \n\
@@ -5548,6 +5653,9 @@ static PyMethodDef addrxlat_methods[] = {
 	{ "strerror", (PyCFunction)_addrxlat_strerror,
 	  METH_VARARGS | METH_KEYWORDS,
 	  _addrxlat_strerror__doc__ },
+	{ "addrspace_name", (PyCFunction)_addrxlat_addrspace_name,
+	  METH_VARARGS | METH_KEYWORDS,
+	  _addrxlat_addrspace_name__doc__ },
 	{ "CAPS", (PyCFunction)_addrxlat_CAPS, METH_VARARGS | METH_KEYWORDS,
 	  _addrxlat_CAPS__doc__ },
 	{ "VER_LINUX", (PyCFunction)_addrxlat_VER_LINUX,
@@ -5791,11 +5899,6 @@ init_addrxlat (void)
 
 	/* Other paging form constants */
 	CONSTDEF(FIELDS_MAX);
-
-	/* OS types */
-	CONSTDEF(OS_UNKNOWN);
-	CONSTDEF(OS_LINUX);
-	CONSTDEF(OS_XEN);
 
 	/* system map indices */
 	CONSTDEF(SYS_MAP_HW);

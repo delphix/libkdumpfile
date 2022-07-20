@@ -38,6 +38,7 @@
 #include <stdio.h>
 #include <stdarg.h>
 #include <errno.h>
+#include <limits.h>
 
 #if USE_ZLIB
 # include <zlib.h>
@@ -161,12 +162,6 @@ mem_hash(const char *s, size_t len)
 	while (len--)
 		hash += (unsigned long)*s++ << (8 * len);
 	return hash;
-}
-
-unsigned long
-string_hash(const char *s)
-{
-	return mem_hash(s, strlen(s));
 }
 
 /**  Update a partial hash with a memory area.
@@ -1159,8 +1154,10 @@ create_derived_attr(kdump_ctx_t *ctx, struct attr_data *dir,
 
 	action = "allocate";
 	attr = new_attr(ctx->dict, dir, &def->tmpl);
-	if (!attr)
+	if (!attr) {
+		status = KDUMP_ERR_SYSTEM;
 		goto err;
+	}
 
 	action = "set";
 	status = set_attr_number(ctx, attr, ATTR_INVALID, 0);

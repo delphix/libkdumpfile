@@ -5,9 +5,12 @@
 # using non-autotranslated Xen page table content alone
 #
 
-arch=x86_64
-ostype=1
-osver=0
-opts="phys_base=0 xen_xlat=true xen_p2m_mfn=0x3abc"
+opts=(
+    arch=x86_64
+    ostype=linux
+    phys_base=0
+    xen_xlat=true
+    xen_p2m_mfn=0x3abc
+)
 
 . "$srcdir"/xlat-os-common

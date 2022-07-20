@@ -23,7 +23,8 @@ AM_CPPFLAGS = -I$(top_builddir)/include
 AM_CFLAGS = -fvisibility=hidden \
 	$(ZLIB_CFLAGS)	\
 	$(LZO_CFLAGS)	\
-	$(SNAPPY_CFLAGS)
+	$(SNAPPY_CFLAGS) \
+	$(ZSTD_CFLAGS)
 
 lib_LTLIBRARIES = libkdumpfile.la
 libkdumpfile_la_SOURCES = \
@@ -55,9 +56,10 @@ libkdumpfile_la_LIBADD = \
 	$(top_builddir)/src/addrxlat/libaddrxlat.la	\
 	$(ZLIB_LIBS)	\
 	$(LZO_LIBS)	\
-	$(SNAPPY_LIBS)
+	$(SNAPPY_LIBS)	\
+	$(ZSTD_LIBS)
 
-libkdumpfile_la_LDFLAGS = -version-info 9:0:0
+libkdumpfile_la_LDFLAGS = -version-info 10:0:0
 
 if HAVE_LD_VERSION_SCRIPT
 libkdumpfile_la_LDFLAGS += -Wl,--version-script=$(srcdir)/libkdumpfile.map
@@ -72,17 +74,23 @@ noinst_HEADERS = \
 dist_noinst_DATA = \
 	libkdumpfile.map
 
-check_PROGRAMS = test-fcache test-blob
+check_LTLIBRARIES = libcheck.la
+libcheck_la_SOURCES = $(libkdumpfile_la_SOURCES)
+libcheck_la_LIBADD = $(libkdumpfile_la_LIBADD)
 
-test_fcache_LDFLAGS = -static
-test_fcache_LDADD = libkdumpfile.la -ldl
+check_PROGRAMS = \
+	test-blob \
+	test-clone-attr \
+	test-fcache
 
-test_blob_LDFLAGS = -static
-test_blob_LDADD = libkdumpfile.la -ldl
+test_fcache_LDADD = libcheck.la -ldl
+test_blob_LDADD = libcheck.la
+test_clone_attr_LDADD = libcheck.la
 
 TESTS = \
 	test-blob \
+	test-clone-attr \
 	test-fcache
 
 clean-local:
-	-rm -f tmp.fcache
+	-rm -f tmp.fcache.*

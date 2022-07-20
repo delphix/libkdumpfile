@@ -32,9 +32,8 @@ ATTR(arch, "pteval_size", pteval_size, number, size_t)
 
 /* address translation */
 ATTR(root, "addrxlat", dir_addrxlat, directory, struct attr_data *)
-ATTR(addrxlat, "opts", dir_xlat_opts, directory, struct attr_data *)
-ATTR(xlat_opts, "pre", xlat_opts_pre, string, const char *, .ops = &dirty_xlat_ops)
-ATTR(xlat_opts, "post", xlat_opts_post, string, const char *, .ops = &dirty_xlat_ops)
+ATTR(addrxlat, "default", dir_xlat_default, directory, struct attr_data *)
+ATTR(addrxlat, "force", dir_xlat_force, directory, struct attr_data *)
 ATTR(addrxlat, "ostype", ostype, string, const char *, .ops = &ostype_ops)
 
 /* cache */
@@ -53,6 +52,12 @@ ATTR(file_mmap_cache, "misses", mmap_cache_misses, number, unsigned long)
 ATTR(file, "read_cache", dir_file_read_cache, directory, struct attr_data *)
 ATTR(file_read_cache, "hits", read_cache_hits, number, unsigned long)
 ATTR(file_read_cache, "misses", read_cache_misses, number, unsigned long)
+
+/* file descriptor set */
+ATTR(file, "fdset", dir_fdset, directory, struct attr_data *)
+
+/* dump file descriptor (for compatibility) */
+ATTR(file, "fd", file_fd, number, int, .ops = &file_fd_ops)
 
 /* mmap policy */
 ATTR(file, "mmap_policy", file_mmap_policy, number, kdump_mmap_policy_t)
