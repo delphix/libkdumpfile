@@ -51,9 +51,9 @@ find_entry(addrxlat_addr_t addr)
 }
 
 static addrxlat_status
-get_page(void *data, addrxlat_buffer_t *buf)
+get_page(const addrxlat_cb_t *cb, addrxlat_buffer_t *buf)
 {
-	addrxlat_ctx_t *ctx = data;
+	addrxlat_ctx_t *ctx = cb->priv;
 	addrxlat_lookup_elem_t *ent = find_entry(buf->addr.addr);
 	if (!ent)
 		return addrxlat_ctx_err(ctx, ADDRXLAT_ERR_NODATA, "No data");
@@ -346,11 +346,7 @@ main(int argc, char **argv)
 	unsigned long long vaddr;
 	char *endp;
 	addrxlat_ctx_t *ctx;
-	addrxlat_cb_t cb = {
-		.get_page = get_page,
-		.read_caps = (ADDRXLAT_CAPS(ADDRXLAT_MACHPHYSADDR) |
-			      ADDRXLAT_CAPS(ADDRXLAT_KVADDR))
-	};
+	addrxlat_cb_t *cb;
 	addrxlat_meth_t pgt, linear, lookup, memarr, *meth;
 	int opt;
 	unsigned long refcnt;
@@ -467,9 +463,16 @@ main(int argc, char **argv)
 		rc = TEST_ERR;
 		goto out;
 	}
-	cb.data = ctx;
-	addrxlat_ctx_set_cb(ctx, &cb);
-
+	cb = addrxlat_ctx_add_cb(ctx);
+	if (!cb) {
+		perror("Cannot initialize address translation callbacks");
+		rc = TEST_ERR;
+		goto out;
+	}
+	cb->priv = ctx;
+	cb->get_page = get_page;
+	cb->read_caps = (ADDRXLAT_CAPS(ADDRXLAT_MACHPHYSADDR) |
+			 ADDRXLAT_CAPS(ADDRXLAT_KVADDR));
 	rc = do_xlat(ctx, meth, vaddr);
 
  out:

@@ -56,24 +56,19 @@ init_cache(struct read_cache *cache)
 
 /**  Clean up the read cache.
  * @param cache  Read cache.
- * @param cb     Callback definitions.
  *
- * Release all cached pages using @c put_page function from the
- * provided callback definition.
+ * Release all cached pages.
  */
 static void
-cleanup_cache(struct read_cache *cache, const addrxlat_cb_t *cb)
+cleanup_cache(struct read_cache *cache)
 {
 	struct read_cache_slot *slot;
-
-	if (!cb->put_page)
-		return;
 
 	slot = &cache->slot[0];
 	do {
 		addrxlat_buffer_t *buf = &slot->buffer;
 		if (buf->size)
-			cb->put_page(cb->data, buf);
+			buf->put_page(buf);
 	} while (++slot < &cache->slot[READ_CACHE_SLOTS]);
 }
 
@@ -99,6 +94,14 @@ touch_cache_slot(struct read_cache *cache, struct read_cache_slot *slot)
 
 	/* Move the MRU pointer. */
 	cache->mru = slot;
+}
+
+/** Default put-page callback.
+ * @param buf  Read buffer metadata (unused).
+ */
+static void
+def_put_page_cb(const addrxlat_buffer_t *buf)
+{
 }
 
 /** Get a cache slot for a given address.
@@ -127,13 +130,14 @@ get_cache_buf(addrxlat_ctx_t *ctx, const addrxlat_fulladdr_t *addr,
 	slot = ctx->cache.mru->prev;
 
 	/* Free up the slot if necessary */
-	if (slot->buffer.size && ctx->cb.put_page)
-		ctx->cb.put_page(ctx->cb.data, &slot->buffer);
+	if (slot->buffer.size)
+		slot->buffer.put_page(&slot->buffer);
 
 	/* Get the new page */
 	slot->buffer.addr = *addr;
 	slot->buffer.ptr = NULL;
-	status = ctx->cb.get_page(ctx->cb.data, &slot->buffer);
+	slot->buffer.put_page = def_put_page_cb;
+	status = ctx->cb->get_page(ctx->cb, &slot->buffer);
 	if (status != ADDRXLAT_OK) {
 		slot->buffer.size = 0;
 		return status;
@@ -190,12 +194,40 @@ bury_cache_buffer(struct read_cache *cache, const addrxlat_fulladdr_t *addr)
 	} while (++slot < &cache->slot[READ_CACHE_SLOTS]);
 }
 
+/** Default symbolic callback.
+ * @param cb    This callback definition.
+ * @param sym   Symbolic information metadata (unused).
+ */
+static addrxlat_status
+def_sym_cb(const addrxlat_cb_t *cb, addrxlat_sym_t *sym)
+{
+	addrxlat_ctx_t *ctx = cb->priv;
+	return set_error(ctx, ADDRXLAT_ERR_NODATA,
+			 "No symbolic information callback");
+}
+
+/** Default get-page callback.
+ * @param cb    This callback definition.
+ * @param buf   Read buffer metadata (unused).
+ */
+static addrxlat_status
+def_get_page_cb(const addrxlat_cb_t *cb, addrxlat_buffer_t *buf)
+{
+	addrxlat_ctx_t *ctx = cb->priv;
+	return set_error(ctx, ADDRXLAT_ERR_NODATA,
+			 "No get-page callback");
+}
+
 addrxlat_ctx_t *
 addrxlat_ctx_new(void)
 {
 	addrxlat_ctx_t *ctx = calloc(1, sizeof(addrxlat_ctx_t) + ERRBUF);
 	if (ctx) {
 		ctx->refcnt = 1;
+		ctx->cb = &ctx->def_cb;
+		ctx->def_cb.priv = ctx;
+		ctx->def_cb.sym = def_sym_cb;
+		ctx->def_cb.get_page = def_get_page_cb;
 		init_cache(&ctx->cache);
 		err_init(&ctx->err, ERRBUF);
 	}
@@ -213,7 +245,13 @@ addrxlat_ctx_decref(addrxlat_ctx_t *ctx)
 {
 	unsigned long refcnt = --ctx->refcnt;
 	if (!refcnt) {
-		cleanup_cache(&ctx->cache, &ctx->cb);
+		cleanup_cache(&ctx->cache);
+		addrxlat_cb_t *p = (addrxlat_cb_t *)ctx->cb;
+		while (p != &ctx->def_cb) {
+			const addrxlat_cb_t *next = p->next;
+			free(p);
+			p = (addrxlat_cb_t *)next;
+		}
 		err_cleanup(&ctx->err);
 		free(ctx);
 	}
@@ -237,26 +275,68 @@ addrxlat_ctx_get_errmsg(addrxlat_ctx_t *ctx)
 	return &ctx->err;
 }
 
-void
-addrxlat_ctx_set_cb(addrxlat_ctx_t *ctx, const addrxlat_cb_t *cb)
+/** Call the next symbol callback.
+ * @param cb    This callback definition.
+ * @param sym   Symbolic information metadata (unused).
+ * @returns     Error status.
+ */
+static addrxlat_status
+next_sym_cb(const addrxlat_cb_t *cb, addrxlat_sym_t *sym)
 {
-	addrxlat_cb_hook_fn *hook = ctx->cb.cb_hook;
-	void *data = ctx->cb.data;
-	ctx->cb = ctx->orig_cb = *cb;
-	if (hook)
-		hook(data, &ctx->cb);
+	return cb->next->sym(cb->next, sym);
+}
+
+/** Call the next get-page callback.
+ * @param cb    This callback definition.
+ * @param buf   Read buffer metadata.
+ * @returns     Error status.
+ */
+static addrxlat_status
+next_get_page_cb(const addrxlat_cb_t *cb, addrxlat_buffer_t *buf)
+{
+	return cb->next->get_page(cb->next, buf);
+}
+
+addrxlat_cb_t *
+addrxlat_ctx_add_cb(addrxlat_ctx_t *ctx)
+{
+	addrxlat_cb_t *cb;
+
+	cb = malloc(sizeof *cb);
+	if (!cb)
+		return cb;
+
+	cb->next = ctx->cb;
+	cb->priv = NULL;
+	cb->sym = next_sym_cb;
+	cb->get_page = next_get_page_cb;
+	cb->read_caps = ctx->cb->read_caps;
+
+	ctx->cb = cb;
+
+	return cb;
+}
+
+void
+addrxlat_ctx_del_cb(addrxlat_ctx_t *ctx, addrxlat_cb_t *cb)
+{
+	const addrxlat_cb_t **pprev = &ctx->cb;
+	const addrxlat_cb_t *p = ctx->cb;
+
+	while (p && p != cb) {
+		pprev = (const addrxlat_cb_t **) &p->next;
+		p = p->next;
+	}
+	if (p) {
+		*pprev = cb->next;
+		free(cb);
+	}
 }
 
 const addrxlat_cb_t *
 addrxlat_ctx_get_cb(const addrxlat_ctx_t *ctx)
 {
-	return &ctx->orig_cb;
-}
-
-addrxlat_cb_t *
-addrxlat_ctx_get_ecb(addrxlat_ctx_t *ctx)
-{
-	return &ctx->cb;
+	return ctx->cb;
 }
 
 DEFINE_ALIAS(addrspace_name);
@@ -272,10 +352,6 @@ addrxlat_addrspace_name(addrxlat_addrspace_t as)
 	default:			return "invalid addrspace_t";
 	}
 }
-
-/** Common format string for missing read callback. */
-static const char read_nocb_fmt[] =
-	"No read callback for %s";
 
 /** Common format string for read callback failures. */
 static const char read_err_fmt[] =
@@ -333,11 +409,7 @@ read32(addrxlat_step_t *step, const addrxlat_fulladdr_t *addr, uint32_t *val,
 	addrxlat_ctx_t *ctx = step->ctx;
 	addrxlat_status status;
 
-	if (!ctx->cb.get_page)
-		return set_error(ctx, ADDRXLAT_ERR_NODATA, read_nocb_fmt,
-				 internal_addrspace_name(addr->as));
-
-	if (ctx->cb.read_caps & ADDRXLAT_CAPS(addr->as)) {
+	if (ctx->cb->read_caps & ADDRXLAT_CAPS(addr->as)) {
 		status = do_read32(ctx, addr, val);
 	} else {
 		addrxlat_op_ctl_t ctl;
@@ -347,7 +419,7 @@ read32(addrxlat_step_t *step, const addrxlat_fulladdr_t *addr, uint32_t *val,
 		ctl.sys = step->sys;
 		ctl.op = read32_op;
 		ctl.data = &param;
-		ctl.caps = ctx->cb.read_caps;
+		ctl.caps = ctx->cb->read_caps;
 		status = internal_op(&ctl, addr);
 	}
 
@@ -405,11 +477,7 @@ read64(addrxlat_step_t *step, const addrxlat_fulladdr_t *addr, uint64_t *val,
 	addrxlat_ctx_t *ctx = step->ctx;
 	addrxlat_status status;
 
-	if (!ctx->cb.get_page)
-		return set_error(ctx, ADDRXLAT_ERR_NODATA, read_nocb_fmt,
-				 internal_addrspace_name(addr->as));
-
-	if (ctx->cb.read_caps & ADDRXLAT_CAPS(addr->as)) {
+	if (ctx->cb->read_caps & ADDRXLAT_CAPS(addr->as)) {
 		status = do_read64(ctx, addr, val);
 	} else {
 		addrxlat_op_ctl_t ctl;
@@ -419,7 +487,7 @@ read64(addrxlat_step_t *step, const addrxlat_fulladdr_t *addr, uint64_t *val,
 		ctl.sys = step->sys;
 		ctl.op = read64_op;
 		ctl.data = &param;
-		ctl.caps = ctx->cb.read_caps;
+		ctl.caps = ctx->cb->read_caps;
 		status = internal_op(&ctl, addr);
 	}
 
@@ -444,13 +512,9 @@ get_reg(addrxlat_ctx_t *ctx, const char *name, addrxlat_addr_t *val)
 	addrxlat_sym_t sym;
 	addrxlat_status status;
 
-	if (!ctx->cb.sym)
-		return set_error(ctx, ADDRXLAT_ERR_NODATA,
-				 "No symbolic information callback");
-
 	sym.type = ADDRXLAT_SYM_REG;
 	sym.args[0] = name;
-	status = ctx->cb.sym(ctx->cb.data, &sym);
+	status = ctx->cb->sym(ctx->cb, &sym);
 	if (status != ADDRXLAT_OK)
 		return set_error(ctx, status,
 				 "Cannot read register \"%s\"", sym.args[0]);
@@ -473,13 +537,9 @@ get_symval(addrxlat_ctx_t *ctx, const char *name, addrxlat_addr_t *val)
 	addrxlat_sym_t sym;
 	addrxlat_status status;
 
-	if (!ctx->cb.sym)
-		return set_error(ctx, ADDRXLAT_ERR_NODATA,
-				 "No symbolic information callback");
-
 	sym.type = ADDRXLAT_SYM_VALUE;
 	sym.args[0] = name;
-	status = ctx->cb.sym(ctx->cb.data, &sym);
+	status = ctx->cb->sym(ctx->cb, &sym);
 	if (status != ADDRXLAT_OK)
 		return set_error(ctx, status,
 				 "Cannot resolve \"%s\"", sym.args[0]);
@@ -502,13 +562,9 @@ get_sizeof(addrxlat_ctx_t *ctx, const char *name, addrxlat_addr_t *sz)
 	addrxlat_sym_t sym;
 	addrxlat_status status;
 
-	if (!ctx->cb.sym)
-		return set_error(ctx, ADDRXLAT_ERR_NODATA,
-				 "No symbolic information callback");
-
 	sym.type = ADDRXLAT_SYM_SIZEOF;
 	sym.args[0] = name;
-	status = ctx->cb.sym(ctx->cb.data, &sym);
+	status = ctx->cb->sym(ctx->cb, &sym);
 	if (status != ADDRXLAT_OK)
 		return set_error(ctx, status, "Cannot get sizeof(%s)",
 				 sym.args[0]);
@@ -533,14 +589,10 @@ get_offsetof(addrxlat_ctx_t *ctx, const char *type, const char *memb,
 	addrxlat_sym_t sym;
 	addrxlat_status status;
 
-	if (!ctx->cb.sym)
-		return set_error(ctx, ADDRXLAT_ERR_NODATA,
-				 "No symbolic information callback");
-
 	sym.type = ADDRXLAT_SYM_OFFSETOF;
 	sym.args[0] = type;
 	sym.args[1] = memb;
-	status = ctx->cb.sym(ctx->cb.data, &sym);
+	status = ctx->cb->sym(ctx->cb, &sym);
 	if (status != ADDRXLAT_OK)
 		return set_error(ctx, status, "Cannot get offsetof(%s, %s)",
 				 sym.args[0], sym.args[1]);
@@ -563,13 +615,9 @@ get_number(addrxlat_ctx_t *ctx, const char *name, addrxlat_addr_t *num)
 	addrxlat_sym_t sym;
 	addrxlat_status status;
 
-	if (!ctx->cb.sym)
-		return set_error(ctx, ADDRXLAT_ERR_NODATA,
-				 "No symbolic information callback");
-
 	sym.type = ADDRXLAT_SYM_NUMBER;
 	sym.args[0] = name;
-	status = ctx->cb.sym(ctx->cb.data, &sym);
+	status = ctx->cb->sym(ctx->cb, &sym);
 	if (status != ADDRXLAT_OK)
 		return set_error(ctx, status, "Cannot get number(%s)",
 				 sym.args[0]);
@@ -593,15 +641,11 @@ get_first_sym(addrxlat_ctx_t *ctx, const struct sym_spec *spec,
 {
 	addrxlat_status status = ADDRXLAT_ERR_NODATA;
 
-	if (!ctx->cb.sym)
-		return set_error(ctx, status,
-				 "No symbolic information callback");
-
 	while (spec->type != ADDRXLAT_SYM_NONE) {
 		addrxlat_sym_t sym;
 		sym.type = spec->type;
 		sym.args[0] = spec->name;
-		status = ctx->cb.sym(ctx->cb.data, &sym);
+		status = ctx->cb->sym(ctx->cb, &sym);
 		if (status == ADDRXLAT_OK) {
 			addr->addr = sym.val;
 			addr->as = spec->as;
