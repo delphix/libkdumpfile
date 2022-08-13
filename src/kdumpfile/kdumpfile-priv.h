@@ -170,7 +170,6 @@ struct format_ops {
 	kdump_status (*probe)(kdump_ctx_t *ctx);
 
 	/** Get page data.
-	 * @param ctx  Dump file object.
 	 * @param pio  Page I/O control.
 	 *
 	 * Note: The requested address space is specified in @c pio.
@@ -178,13 +177,12 @@ struct format_ops {
 	 * Since most file formats specify only one capability, their
 	 * get_page methods do not have to care.
 	 */
-	kdump_status (*get_page)(kdump_ctx_t *ctx, struct page_io *pio);
+	kdump_status (*get_page)(struct page_io *pio);
 
 	/** Drop a reference to a page.
-	 * @param ctx  Dump file object.
 	 * @param pio  Page I/O control.
 	 */
-	void (*put_page)(kdump_ctx_t *ctx, struct page_io *pio);
+	void (*put_page)(struct page_io *pio);
 
 	/** Address translation post-hook.
 	 * @param ctx  Dump file object.
@@ -705,6 +703,9 @@ struct _kdump_ctx {
 	/** Address translation context. */
 	addrxlat_ctx_t *xlatctx;
 
+	/** Address translation callbacks. */
+	addrxlat_cb_t *xlatcb;
+
 	/** Per-context data. */
 	void *data[PER_CTX_SLOTS];
 
@@ -729,6 +730,7 @@ INTERNAL_DECL(extern const struct format_ops, diskdump_ops, );
 INTERNAL_DECL(extern const struct format_ops, lkcd_ops, );
 INTERNAL_DECL(extern const struct format_ops, mclxcd_ops, );
 INTERNAL_DECL(extern const struct format_ops, s390dump_ops, );
+INTERNAL_DECL(extern const struct format_ops, sadump_ops, );
 INTERNAL_DECL(extern const struct format_ops, devmem_ops, );
 
 INTERNAL_DECL(kdump_status, linux_iomem_kcode,
@@ -937,7 +939,7 @@ INTERNAL_DECL(kdump_status, process_arch_notes,
 	      (kdump_ctx_t *ctx, void *data, size_t size));
 
 /* Virtual address space regions */
-INTERNAL_DECL(addrxlat_ctx_t *, init_addrxlat, (kdump_ctx_t *ctx));
+INTERNAL_DECL(kdump_status, init_addrxlat, (kdump_ctx_t *ctx));
 
 INTERNAL_DECL(kdump_status, create_addrxlat_attrs, (struct attr_dict *dict));
 
@@ -1427,55 +1429,113 @@ INTERNAL_DECL(void, fcache_put_chunk, (struct fcache_chunk *fch));
  * and the format-specific I/O methods.
  */
 struct page_io {
+	kdump_ctx_t *ctx;	   /**< Associated dump file object. */
 	addrxlat_fulladdr_t addr;  /**< Address of page under I/O. */
 	struct fcache_chunk chunk; /**< File cache chunk. */
 };
 
-typedef kdump_status read_page_fn(
-	kdump_ctx_t *ctx, struct page_io *pio);
+typedef kdump_status read_page_fn(struct page_io *pio);
 
 INTERNAL_DECL(kdump_status, cache_get_page,
-	      (kdump_ctx_t *ctx, struct page_io *pio, read_page_fn *fn));
+	      (struct page_io *pio, read_page_fn *fn));
 INTERNAL_DECL(void, cache_put_page,
-	      (kdump_ctx_t *ctx, struct page_io *pio));
+	      (struct page_io *pio));
 
 /** Get page data.
- * @param ctx  Dump file object.
  * @param pio  Page I/O control.
  * @returns    Error status.
  *
  * Intended use of this function:
- * - Fill in @c pio.addr.
+ * - Fill in @c pio.ctx and @c pio.addr.
  * - Call @c get_page.
  * - Check return status. If successful, @c pio.chunk.data
  *   contains a pointer to the cached page data.
  */
 static inline kdump_status
-get_page(kdump_ctx_t *ctx, struct page_io *pio)
+get_page(struct page_io *pio)
 {
-	return ctx->shared->ops->get_page(ctx, pio);
+	return pio->ctx->shared->ops->get_page(pio);
 }
 
 /** Release page data.
- * @param ctx  Dump file object.
  * @param pio  Page I/O control.
  *
  * Call this function to let the cache know that the data structures
  * used to provide the buffer are no longer needed.
  */
 static inline void
-put_page(kdump_ctx_t *ctx, struct page_io *pio)
+put_page(struct page_io *pio)
 {
-	ctx->shared->ops->put_page(ctx, pio);
+	pio->ctx->shared->ops->put_page(pio);
 }
 
 /* Inline utility functions */
 
 static inline unsigned
-bitcount(unsigned x)
+popcount(uint32_t x)
 {
-	return (uint32_t)((((x * 0x08040201) >> 3) & 0x11111111) * 0x11111111)
-		>> 28;
+#ifdef __GNUC__
+	return __builtin_popcount(x);
+#else
+	x -= (x >> 1) & 0x55555555;
+	x = (x & 0x33333333) + ((x >> 2) & 0x33333333);
+	x = (x + (x >> 4)) & 0x0f0f0f0f;
+	return (x * 0x01010101) >> 24;
+#endif
+}
+
+static inline unsigned
+ctz(uint32_t x)
+{
+#ifdef __GNUC__
+	return __builtin_ctz(x);
+#else
+	unsigned c = 1;
+	if (!(x & 0xffff)) {
+		x >>= 16;
+		c += 16;
+	}
+	if (!(x & 0xff)) {
+		x >>= 8;
+		c += 8;
+	}
+	if (!(x & 0xf)) {
+		x >>= 4;
+		c += 4;
+	}
+	if (!(x & 0x3)) {
+		x >>= 2;
+		c += 2;
+	}
+	return c - (x & 0x1);
+#endif
+}
+
+static inline unsigned
+clz(uint32_t x)
+{
+#ifdef __GNUC__
+	return __builtin_clz(x);
+#else
+	unsigned c = 0;
+	if (!(x & 0xffff0000)) {
+		x <<= 16;
+		c += 16;
+	}
+	if (!(x & 0xff000000)) {
+		x <<= 8;
+		c += 8;
+	}
+	if (!(x & 0xf0000000)) {
+		x <<= 4;
+		c += 4;
+	}
+	if (!(x & 0xc0000000)) {
+		x <<= 2;
+		c += 2;
+	}
+	return c + !(x & 0x80000000);
+#endif
 }
 
 static inline uint16_t
@@ -1546,6 +1606,80 @@ static inline kdump_addr_t
 pfn_to_addr(struct kdump_shared *shared, kdump_addr_t pfn)
 {
 	return pfn << sget_page_shift(shared);
+}
+
+/** PFN region mapping. */
+struct pfn_region {
+	/** First PFN in the region. */
+	kdump_pfn_t pfn;
+
+	/** Number of pages in this region. */
+	kdump_pfn_t cnt;
+
+	/** File position corresponding to the first PFN. */
+	off_t pos;
+};
+
+/** Mapping from PFN to file position using @c struct @ref pfn_region.
+ */
+struct pfn_file_map {
+	/** PFN region map. */
+	struct pfn_region *regions;
+
+	/** Number of elements in the map. */
+	size_t nregions;
+
+	/** File index in dump file set. */
+	unsigned fidx;
+
+	/** Lowest PFN mapped to this file. */
+	kdump_pfn_t start_pfn;
+
+	/** One above the highest PFN mapped to this file.
+	 * This is the lowest next PFN which is not mapped.
+	 */
+	kdump_pfn_t end_pfn;
+};
+
+INTERNAL_DECL(struct pfn_region *, add_pfn_region,
+	      (struct pfn_file_map *map, const struct pfn_region *rgn));
+INTERNAL_DECL(const struct pfn_region *, find_pfn_region,
+	      (const struct pfn_file_map *map, kdump_pfn_t pfn));
+INTERNAL_DECL(kdump_status, pfn_regions_from_bitmap,
+	      (kdump_errmsg_t *err, struct pfn_file_map *pfm,
+	       const unsigned char *bitmap, bool is_msb0,
+	       kdump_pfn_t start_pfn, kdump_pfn_t end_pfn,
+	       off_t fileoff, off_t elemsz));
+
+INTERNAL_DECL(bool, find_mapped_pfn,
+	      (const struct pfn_file_map *maps, size_t nmaps,
+	       kdump_pfn_t *ppfn));
+INTERNAL_DECL(kdump_pfn_t, find_unmapped_pfn,
+	      (const struct pfn_file_map *maps, size_t nmaps,
+	       kdump_pfn_t pfn));
+INTERNAL_DECL(void, get_pfn_map_bits,
+	      (const struct pfn_file_map *maps, size_t nmaps,
+	       kdump_addr_t first, kdump_addr_t last, unsigned char *bits));
+INTERNAL_DECL(void, sort_pfn_file_maps,
+	      (struct pfn_file_map *maps, size_t nmaps));
+
+/** Find a page descriptor map by PFN.
+ * @param maps   Array of PFN-to-file maps.
+ * @param nmaps  Number of elements in @p maps.
+ * @param pfn    Page frame number.
+ * @returns      PFN-to-file map which contains @p pfn or the closest
+ *               higher PFN. If there is no such map, returns @c NULL.
+ */
+static inline const struct pfn_file_map *
+find_pfn_file_map(const struct pfn_file_map *maps, size_t nmaps,
+		  unsigned long pfn)
+{
+	while (nmaps--) {
+		if (pfn < maps->end_pfn)
+			return maps;
+		++maps;
+	}
+	return NULL;
 }
 
 /** Check if a character is a POSIX white space.
