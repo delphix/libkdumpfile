@@ -68,6 +68,12 @@ find_entry(addrxlat_addr_t addr, size_t sz)
 	return NULL;
 }
 
+static unsigned long
+read_caps(const addrxlat_cb_t *cb)
+{
+	return ADDRXLAT_CAPS(entry_as);
+}
+
 static addrxlat_status
 get_page(const addrxlat_cb_t *cb, addrxlat_buffer_t *buf)
 {
@@ -110,16 +116,28 @@ add_entry(addrxlat_addr_t addr, void *buf, size_t sz)
 	return TEST_OK;
 }
 
+#define SYM_ARGC_MAX	2
+
 struct symdata {
 	struct symdata *next;
-	addrxlat_sym_t ss;
+	const char *args[SYM_ARGC_MAX];
 	addrxlat_addr_t val;
 };
 
-static struct symdata *symdata;
+struct symstore {
+	struct symdata **list;
+	struct symdata data;
+};
+
+static struct symdata *symdata_reg;
+static struct symdata *symdata_value;
+static struct symdata *symdata_sizeof;
+static struct symdata *symdata_offsetof;
+static struct symdata *symdata_number;
 
 static int
-add_symdata(const addrxlat_sym_t *ss, addrxlat_addr_t val)
+add_symdata(struct symdata **list, const char *const *args,
+	    addrxlat_addr_t val)
 {
 	struct symdata *sd = malloc(sizeof(*sd));
 	if (!sd) {
@@ -127,44 +145,69 @@ add_symdata(const addrxlat_sym_t *ss, addrxlat_addr_t val)
 		return TEST_ERR;
 	}
 
-	sd->ss = *ss;
+	memcpy(&sd->args, args, sizeof sd->args);
 	sd->val = val;
-	sd->next = symdata;
-	symdata = sd;
+	sd->next = *list;
+	*list = sd;
 	return TEST_OK;
 }
 
 static addrxlat_status
-get_symdata(const addrxlat_cb_t *cb, addrxlat_sym_t *sym)
+get_symdata_offsetof(const addrxlat_cb_t *cb, const char *obj,
+		     const char *elem, addrxlat_addr_t *val)
 {
 	struct symdata *sd;
-	for (sd = symdata; sd; sd = sd->next) {
-		if (sd->ss.type != sym->type)
-			continue;
-
-		switch (sd->ss.type) {
-		case ADDRXLAT_SYM_REG:
-		case ADDRXLAT_SYM_VALUE:
-		case ADDRXLAT_SYM_SIZEOF:
-		case ADDRXLAT_SYM_NUMBER:
-			if (sd->ss.args[0] &&
-			    !strcmp(sd->ss.args[0], sym->args[0])) {
-				sym->val = sd->val;
-				return ADDRXLAT_OK;
-			}
-			break;
-
-		case ADDRXLAT_SYM_OFFSETOF:
-			if (sd->ss.args[0] && sd->ss.args[1] &&
-			    !strcmp(sd->ss.args[0], sym->args[0]) &&
-			    !strcmp(sd->ss.args[1], sym->args[1])) {
-				sym->val = sd->val;
-				return ADDRXLAT_OK;
-			}
+	for (sd = symdata_offsetof; sd; sd = sd->next)
+		if (sd->args[0] && sd->args[1] &&
+		    !strcmp(sd->args[0], obj) &&
+		    !strcmp(sd->args[1], elem)) {
+			*val = sd->val;
+			return ADDRXLAT_OK;
 		}
-	}
 
 	return ADDRXLAT_ERR_NODATA;
+}
+
+static addrxlat_status
+get_symdata_list(const addrxlat_cb_t *cb, const char *name,
+		 addrxlat_addr_t *val, struct symdata *sd)
+{
+	for (; sd; sd = sd->next)
+		if (sd->args[0] &&
+		    !strcmp(sd->args[0], name)) {
+			*val = sd->val;
+			return ADDRXLAT_OK;
+		}
+
+	return ADDRXLAT_ERR_NODATA;
+}
+
+static addrxlat_status
+get_symdata_reg(const addrxlat_cb_t *cb, const char *name,
+		addrxlat_addr_t *val)
+{
+	return get_symdata_list(cb, name, val, symdata_reg);
+}
+
+static addrxlat_status
+get_symdata_value(const addrxlat_cb_t *cb, const char *name,
+		  addrxlat_addr_t *val)
+{
+	return get_symdata_list(cb, name, val, symdata_value);
+}
+
+static addrxlat_status
+get_symdata_sizeof(const addrxlat_cb_t *cb, const char *name,
+		   addrxlat_addr_t *val)
+{
+	return get_symdata_list(cb, name, val, symdata_sizeof);
+}
+
+static addrxlat_status
+get_symdata_number(const addrxlat_cb_t *cb, const char *name,
+		   addrxlat_addr_t *val)
+{
+	return get_symdata_list(cb, name, val, symdata_number);
 }
 
 static char *arch;
@@ -471,8 +514,12 @@ os_map(void)
 	}
 	cb->priv = &data;
 	cb->get_page = get_page;
-	cb->read_caps = ADDRXLAT_CAPS(entry_as);
-	cb->sym = get_symdata;
+	cb->read_caps = read_caps;
+	cb->reg_value = get_symdata_reg;
+	cb->sym_value = get_symdata_value;
+	cb->sym_sizeof = get_symdata_sizeof;
+	cb->sym_offsetof = get_symdata_offsetof;
+	cb->num_value = get_symdata_number;
 
 	data.sys = addrxlat_sys_new();
 	if (!data.sys) {
@@ -532,7 +579,7 @@ os_map(void)
 static int
 symheader(struct page_data *pg, char *p)
 {
-	addrxlat_sym_t *ss = pg->priv;
+	struct symstore *ss = pg->priv;
 	char *delim;
 	int argc;
 
@@ -543,19 +590,19 @@ symheader(struct page_data *pg, char *p)
 	}
 
 	if (!strncmp(p, "REG", 3)) {
-		ss->type = ADDRXLAT_SYM_REG;
+		ss->list = &symdata_reg;
 		p += 3;
 	} else if (!strncmp(p, "VALUE", 5)) {
-		ss->type = ADDRXLAT_SYM_VALUE;
+		ss->list = &symdata_value;
 		p += 5;
 	} else if (!strncmp(p, "SIZEOF", 6)) {
-		ss->type = ADDRXLAT_SYM_SIZEOF;
+		ss->list = &symdata_sizeof;
 		p += 6;
 	} else if (!strncmp(p, "OFFSETOF", 8)) {
-		ss->type = ADDRXLAT_SYM_OFFSETOF;
+		ss->list = &symdata_offsetof;
 		p += 8;
 	} else if (!strncmp(p, "NUMBER", 6)) {
-		ss->type = ADDRXLAT_SYM_NUMBER;
+		ss->list = &symdata_number;
 		p += 6;
 	} else {
 		fprintf(stderr, "Invalid symbolic header: %s\n", p);
@@ -570,7 +617,7 @@ symheader(struct page_data *pg, char *p)
 	}
 	++p;
 
-	for (argc = 0; argc < ADDRXLAT_SYM_ARGC_MAX; ++argc) {
+	for (argc = 0; argc < SYM_ARGC_MAX; ++argc) {
 		char *endp, *arg;
 
 		while (isspace(*p))
@@ -592,11 +639,11 @@ symheader(struct page_data *pg, char *p)
 		}
 		memcpy(arg, p, endp - p);
 		arg[endp - p] = '\0';
-		ss->args[argc] = arg;
+		ss->data.args[argc] = arg;
 
 		if (*delim == ')') {
-			while (++argc < ADDRXLAT_SYM_ARGC_MAX)
-				ss->args[argc] = NULL;
+			while (++argc < SYM_ARGC_MAX)
+				ss->data.args[argc] = NULL;
 			return TEST_OK;
 		}
 
@@ -610,7 +657,7 @@ symheader(struct page_data *pg, char *p)
 static int
 storesym(struct page_data *pg)
 {
-	addrxlat_sym_t *ss = pg->priv;
+	struct symstore *ss = pg->priv;
 	addrxlat_addr_t val;
 	size_t sz = pg->len;
 
@@ -622,13 +669,13 @@ storesym(struct page_data *pg)
 #else
 	memcpy((char*)(&val + 1) - sz, pg->buf, sz);
 #endif
-	return add_symdata(ss, val);
+	return add_symdata(ss->list, ss->data.args, val);
 }
 
 static int
 read_sym(void)
 {
-	addrxlat_sym_t ss;
+	struct symstore ss;
 	struct page_data pg;
 
 #if __BYTE_ORDER == __LITTLE_ENDIAN
