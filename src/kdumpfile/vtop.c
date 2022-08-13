@@ -539,15 +539,27 @@ const struct attr_ops xen_dirty_xlat_ops = {
 	.pre_clear = (attr_pre_clear_fn*)xen_dirty_xlat_hook,
 };
 
+/**  Addrxlat put_page callback.
+ * @param buf   Page buffer metadata.
+ * @returns     Error status.
+ */
+static void
+addrxlat_put_page(const addrxlat_buffer_t *buf)
+{
+	struct page_io *pio = buf->priv;
+	put_page(pio);
+	free(pio);
+}
+
 /**  Addrxlat get_page callback.
- * @param data  Dump file object.
+ * @param cb    This callback definition.
  * @param buf   Page buffer metadata.
  * @returns     Error status.
  */
 static addrxlat_status
-addrxlat_get_page(void *data, addrxlat_buffer_t *buf)
+addrxlat_get_page(const addrxlat_cb_t *cb, addrxlat_buffer_t *buf)
 {
-	kdump_ctx_t *ctx = (kdump_ctx_t*) data;
+	kdump_ctx_t *ctx = (kdump_ctx_t*) cb->priv;
 	struct page_io *pio;
 	kdump_status status;
 
@@ -560,11 +572,13 @@ addrxlat_get_page(void *data, addrxlat_buffer_t *buf)
 	buf->addr.addr = page_align(ctx, buf->addr.addr);
 	buf->size = get_page_size(ctx);
 	buf->byte_order = get_byte_order(ctx);
+	buf->put_page = addrxlat_put_page;
 	buf->priv = pio;
 
+	pio->ctx = ctx;
 	pio->addr.addr = buf->addr.addr;
 	pio->addr.as = buf->addr.as;
-	status = get_page(ctx, pio);
+	status = get_page(pio);
 	if (status != KDUMP_OK)
 		return kdump2addrxlat(ctx, status);
 
@@ -572,24 +586,15 @@ addrxlat_get_page(void *data, addrxlat_buffer_t *buf)
 	return ADDRXLAT_OK;
 }
 
-/**  Addrxlat put_page callback.
- * @param data  Dump file object.
- * @param buf   Page buffer metadata.
- * @returns     Error status.
+/** Symbolic callback using vmcoreinfo.
+ * @param cb   This callback definition.
+ * @param sym  Symbolic info metadata.
+ * @returns    Error status.
  */
-static void
-addrxlat_put_page(void *data, const addrxlat_buffer_t *buf)
-{
-	kdump_ctx_t *ctx = (kdump_ctx_t*) data;
-	struct page_io *pio = buf->priv;
-	put_page(ctx, pio);
-	free(pio);
-}
-
 static addrxlat_status
-addrxlat_sym(void *data, addrxlat_sym_t *sym)
+addrxlat_sym(const addrxlat_cb_t *cb, addrxlat_sym_t *sym)
 {
-	kdump_ctx_t *ctx = (kdump_ctx_t*) data;
+	kdump_ctx_t *ctx = (kdump_ctx_t*) cb->priv;
 	struct attr_data *base;
 	struct attr_data *attr;
 	kdump_status status;
@@ -691,27 +696,36 @@ addrxlat_sym(void *data, addrxlat_sym_t *sym)
 	return ret;
 }
 
-addrxlat_ctx_t *
+kdump_status
 init_addrxlat(kdump_ctx_t *ctx)
 {
 	addrxlat_ctx_t *addrxlat;
-	addrxlat_cb_t cb = {
-		.data = ctx,
-		.get_page = addrxlat_get_page,
-		.put_page = addrxlat_put_page,
-		.read_caps = (ADDRXLAT_CAPS(ADDRXLAT_KPHYSADDR) |
-			      ADDRXLAT_CAPS(ADDRXLAT_MACHPHYSADDR) |
-			      ADDRXLAT_CAPS(ADDRXLAT_KVADDR)),
-		.sym = addrxlat_sym
-	};
+	addrxlat_cb_t *cb;
 
 	addrxlat = addrxlat_ctx_new();
 	if (!addrxlat)
-		return addrxlat;
+		return set_error(ctx, KDUMP_ERR_SYSTEM,
+				 "Cannot allocate %s",
+				 "address translation context");
 
-	addrxlat_ctx_set_cb(addrxlat, &cb);
+	cb = addrxlat_ctx_add_cb(addrxlat);
+	if (!cb) {
+		addrxlat_ctx_decref(addrxlat);
+		return set_error(ctx, KDUMP_ERR_SYSTEM,
+				 "Cannot allocate %s",
+				 "address translation callbacks");
+	}
 
-	return addrxlat;
+	cb->priv = ctx;
+	cb->sym = addrxlat_sym;
+	cb->get_page = addrxlat_get_page;
+	cb->read_caps = (ADDRXLAT_CAPS(ADDRXLAT_KPHYSADDR) |
+			 ADDRXLAT_CAPS(ADDRXLAT_MACHPHYSADDR) |
+			 ADDRXLAT_CAPS(ADDRXLAT_KVADDR));
+
+	ctx->xlatctx = addrxlat;
+	ctx->xlatcb = cb;
+	return KDUMP_OK;
 }
 
 /**  Allocate a new translation definition.

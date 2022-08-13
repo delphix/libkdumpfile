@@ -69,9 +69,9 @@ find_entry(addrxlat_addr_t addr, size_t sz)
 }
 
 static addrxlat_status
-get_page(void *data, addrxlat_buffer_t *buf)
+get_page(const addrxlat_cb_t *cb, addrxlat_buffer_t *buf)
 {
-	struct cbdata *cbd = data;
+	struct cbdata *cbd = cb->priv;
 	struct entry *ent;
 
 	if (buf->addr.as != entry_as)
@@ -135,7 +135,7 @@ add_symdata(const addrxlat_sym_t *ss, addrxlat_addr_t val)
 }
 
 static addrxlat_status
-get_symdata(void *data, addrxlat_sym_t *sym)
+get_symdata(const addrxlat_cb_t *cb, addrxlat_sym_t *sym)
 {
 	struct symdata *sd;
 	for (sd = symdata; sd; sd = sd->next) {
@@ -455,12 +455,7 @@ static int
 os_map(void)
 {
 	struct cbdata data;
-	addrxlat_cb_t cb = {
-		.data = &data,
-		.get_page = get_page,
-		.read_caps = ADDRXLAT_CAPS(entry_as),
-		.sym = get_symdata
-	};
+	addrxlat_cb_t *cb;
 	addrxlat_opt_t opts[ADDRXLAT_OPT_NUM];
 	addrxlat_status status;
 
@@ -469,7 +464,15 @@ os_map(void)
 		perror("Cannot allocate addrxlat");
 		return TEST_ERR;
 	}
-	addrxlat_ctx_set_cb(data.ctx, &cb);
+	cb = addrxlat_ctx_add_cb(data.ctx);
+	if (!cb) {
+		perror("Cannot allocate addrxlat callbacks");
+		return TEST_ERR;
+	}
+	cb->priv = &data;
+	cb->get_page = get_page;
+	cb->read_caps = ADDRXLAT_CAPS(entry_as);
+	cb->sym = get_symdata;
 
 	data.sys = addrxlat_sys_new();
 	if (!data.sys) {

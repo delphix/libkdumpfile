@@ -778,9 +778,9 @@ find_entry(addrxlat_addr_t addr, size_t sz)
 }
 
 static addrxlat_status
-get_page(void *data, addrxlat_buffer_t *buf)
+get_page(const addrxlat_cb_t *cb, addrxlat_buffer_t *buf)
 {
-	struct cbdata *cbd = data;
+	struct cbdata *cbd = cb->priv;
 	struct entry *ent;
 
 	if (buf->addr.as != ADDRXLAT_MACHPHYSADDR)
@@ -903,11 +903,7 @@ int main(int argc, char *argv[])
 	char *paramfn = NULL;
 	FILE *param, *cfg;
 	struct cbdata data;
-	addrxlat_cb_t cb = {
-		.data = &data,
-		.get_page = get_page,
-		.read_caps = ADDRXLAT_CAPS(ADDRXLAT_MACHPHYSADDR)
-	};
+	addrxlat_cb_t *cb;
 	int c;
 	int i;
 	int rc;
@@ -950,7 +946,14 @@ int main(int argc, char *argv[])
 		perror("Cannot allocate addrxlat");
 		return TEST_ERR;
 	}
-	addrxlat_ctx_set_cb(data.ctx, &cb);
+	cb = addrxlat_ctx_add_cb(data.ctx);
+	if (!cb) {
+		perror("Cannot allocate addrxlat callbacks");
+		return TEST_ERR;
+	}
+	cb->priv = &data;
+	cb->get_page = get_page;
+	cb->read_caps = ADDRXLAT_CAPS(ADDRXLAT_MACHPHYSADDR);
 
 	cfg = fopen(cfg_file, "r");
 	if (!cfg) {

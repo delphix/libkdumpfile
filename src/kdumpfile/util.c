@@ -851,16 +851,13 @@ kdump_status
 get_symbol_val(kdump_ctx_t *ctx, const char *name, kdump_addr_t *val)
 {
 	addrxlat_sym_t sym;
-	addrxlat_cb_t *cb;
+	const addrxlat_cb_t *cb;
 	addrxlat_status status;
 
-	cb = addrxlat_ctx_get_ecb(ctx->xlatctx);
-	if (!cb->sym)
-		return set_error(ctx, KDUMP_ERR_NODATA, "NULL callback");
-
+	cb = addrxlat_ctx_get_cb(ctx->xlatctx);
 	sym.type = ADDRXLAT_SYM_VALUE;
 	sym.args[0] = name;
-	status = cb->sym(cb->data, &sym);
+	status = cb->sym(cb, &sym);
 	if (status != ADDRXLAT_OK)
 		return set_error(ctx, addrxlat2kdump(ctx, status),
 				 "Cannot resolve \"%s\"", sym.args[0]);

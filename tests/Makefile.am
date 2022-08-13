@@ -35,6 +35,7 @@ check_LIBRARIES = \
 check_HEADERS = \
 	diskdump.h \
 	lkcd.h \
+	sadump.h \
 	testutil.h
 
 addrmap_LDADD = \
@@ -122,8 +123,10 @@ check_PROGRAMS = \
 	err-addrxlat \
 	fdset \
 	mkdiskdump \
+	mksadump \
 	mkelf \
 	mklkcd \
+	mksadump \
 	multiread \
 	multixlat \
 	nometh \
@@ -229,6 +232,10 @@ test_scripts = \
 	lkcd-duplicate-middle \
 	multixlat-elf \
 	multixlat-same \
+	sadump-basic-diskset \
+	sadump-basic-media \
+	sadump-basic-single \
+	sadump-basic-single-ia32 \
 	sys-xlat-x86_64-linux \
 	sys-xlat-x86_64-linux-xen \
 	xlatmap-check \
@@ -487,6 +494,7 @@ dist_check_SCRIPTS = \
 	lkcd-empty \
 	lkcd-basic \
 	lkcd-wrong-page-size \
+	sadump-basic \
 	sys-xlat-common \
 	xlat-os-common \
 	$(test_scripts)
