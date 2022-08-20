@@ -193,14 +193,14 @@ skip_set_lsb0(const unsigned char *bitmap, size_t size, kdump_pfn_t pfn)
 	pfn = (pfn | 7) + 1;
 	++bp;
 	for (; endp - bp >= 1 && ((uintptr_t)bp & 3) != 0; pfn += 8, ++bp)
-		if (~*bp)
-			return pfn + ctz(~*bp);
+		if (~*(signed char*)bp)
+			return pfn + ctz(~*(signed char*)bp);
 	for (; endp - bp >= 4; pfn += 32, bp += 4)
 		if (~*(uint32_t*)bp)
 			return pfn + ctz(~*(uint32_t*)bp);
 	for (; endp - bp >= 1; pfn += 8, ++bp)
-		if (~*bp)
-			return pfn + ctz(~*bp);
+		if (~*(signed char*)bp)
+			return pfn + ctz(~*(signed char*)bp);
 
 	return pfn;
 }
@@ -231,13 +231,13 @@ skip_set_msb0(const unsigned char *bitmap, size_t size, kdump_pfn_t pfn)
 	pfn = (pfn | 7) + 1;
 	++bp;
 	for (; endp - bp >= 1 && ((uintptr_t)bp & 3) != 0; pfn += 8, ++bp)
-		if (~*bp)
+		if (*bp != 0xff)
 			return pfn + clz(~((uint32_t)*bp << 24));
 	for (; endp - bp >= 4; pfn += 32, bp += 4)
 		if (~*(uint32_t*)bp)
 			return pfn + clz(~be32toh(*(uint32_t*)bp));
 	for (; endp - bp >= 1; pfn += 8, ++bp)
-		if (~*bp)
+		if (*bp != 0xff)
 			return pfn + clz(~((uint32_t)*bp << 24));
 
 	return pfn;
@@ -261,7 +261,7 @@ pfn_regions_from_bitmap(kdump_errmsg_t *err, struct pfn_file_map *pfm,
 			kdump_pfn_t start_pfn, kdump_pfn_t end_pfn,
 			off_t fileoff, off_t elemsz)
 {
-	size_t bitmapsize = end_pfn << 3;
+	size_t bitmapsize = (end_pfn + 7) >> 3;
 	kdump_pfn_t pfn = start_pfn;
 	struct pfn_region rgn;
 
@@ -274,6 +274,8 @@ pfn_regions_from_bitmap(kdump_errmsg_t *err, struct pfn_file_map *pfm,
 			rgn.pfn = skip_clear_lsb0(bitmap, bitmapsize, pfn);
 			pfn = skip_set_lsb0(bitmap, bitmapsize, rgn.pfn);
 		}
+		if (rgn.pfn > end_pfn)
+			rgn.pfn = end_pfn;
 		if (pfn > end_pfn)
 			pfn = end_pfn;
 		rgn.cnt = pfn - rgn.pfn;
