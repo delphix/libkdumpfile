@@ -500,6 +500,12 @@ typedef struct _addrxlat_param_linear {
 /** Page table entry format.
  */
 typedef enum _addrxlat_pte_format {
+	/** Invalid PTE format value.
+	 * It may be returned by the library on error.
+	 * Use @c ADDRXLAT_PTE_NONE if the format is merely unknown.
+	 */
+	ADDRXLAT_PTE_INVALID = -1,
+
 	ADDRXLAT_PTE_NONE,	/**< Undefined. */
 	ADDRXLAT_PTE_PFN32,	/**< 32-bit page frame number. */
 	ADDRXLAT_PTE_PFN64,	/**< 64-bit page frame number. */
@@ -519,33 +525,28 @@ typedef enum _addrxlat_pte_format {
 	ADDRXLAT_PTE_AARCH64_LPA2,
 } addrxlat_pte_format_t;
 
+/** Get the (string) name of a PTE format.
+ * @param fmt  PTE format.
+ * @returns    The (human-readable) name of the address space,
+ *             or @c NULL if unknown.
+ */
+const char *addrxlat_pte_format_name(addrxlat_pte_format_t fmt);
+
+/** Get a PTE format enum value by name.
+ * @param name  PTE name.
+ * @returns     PTE format, or @c ADDRXLAT_PTE_INVALID if @p name is
+ *              not recognized.
+ *
+ * The name is not case-sensitive, e.g. "AARCH64", "AArch64" and "aarch64"
+ * are handled the same.
+ */
+addrxlat_pte_format_t addrxlat_pte_format(const char *name);
+
 /** Get the pteval shift for a PTE format.
  * @param fmt  PTE format.
  * @returns    Log2 value of the PTE size, or -1 if unknown / invalid.
  */
-static inline int
-addrxlat_pteval_shift(addrxlat_pte_format_t fmt)
-{
-	switch (fmt) {
-	case ADDRXLAT_PTE_PFN32:
-	case ADDRXLAT_PTE_IA32:
-		return 2;
-
-	case ADDRXLAT_PTE_PFN64:
-	case ADDRXLAT_PTE_AARCH64:
-	case ADDRXLAT_PTE_AARCH64_LPA:
-	case ADDRXLAT_PTE_AARCH64_LPA2:
-	case ADDRXLAT_PTE_IA32_PAE:
-	case ADDRXLAT_PTE_X86_64:
-	case ADDRXLAT_PTE_S390X:
-	case ADDRXLAT_PTE_PPC64_LINUX_RPN30:
-		return 3;
-
-	case ADDRXLAT_PTE_NONE:
-	default:
-		return -1;
-	}
-}
+int addrxlat_pteval_shift(addrxlat_pte_format_t fmt);
 
 /** Maximum number of bit fields in the source address.
  * This is a theoretical limit, with enough reserve for future enhancements.
