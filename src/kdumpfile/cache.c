@@ -78,7 +78,7 @@ struct cache {
 	unsigned ngprec;	 /**< Number of ghost precious entries */
 	unsigned nprobe;	 /**< Number of cached probe entries */
 	unsigned ngprobe;	 /**< Number of ghost probe entries */
-	unsigned dprobe;	 /**< Desired nubmer of cached probe entries */
+	unsigned dprobe;	 /**< Desired number of cached probe entries */
 	unsigned nprobetotal;	 /**< Total number of probe list entries,
 				  *   including ghost and in-flight entries */
 	unsigned cap;		 /**< Total cache capacity */
@@ -204,10 +204,11 @@ make_precious(struct cache *cache, struct cache_entry *entry)
  * @param cache  Cache object.
  * @param entry  Cache entry to be moved.
  * @param idx    Index of @ref entry.
+ * @returns      The value of @p entry.
  *
  * Move a cache entry to the MRU position of the precious list.
  */
-static void
+static struct cache_entry *
 reuse_cached_entry(struct cache *cache, struct cache_entry *entry,
 		   unsigned idx)
 {
@@ -219,6 +220,7 @@ reuse_cached_entry(struct cache *cache, struct cache_entry *entry,
 	cache->split = entry->prev;
 
 	++cache->hits.number;
+	return entry;
 }
 
 /**  Evict an entry from the probe list.
@@ -346,6 +348,7 @@ get_missed_entry(struct cache *cache, cache_key_t key,
  * @param entry  Ghost entry to be reused.
  * @param idx    Index of @ref entry.
  * @param cs     Cache search info.
+ * @returns      The value of @p entry.
  *
  * Same as @ref reinit_entry, but designed for ghost entries.
  * This function is used for pages that will be added to the precious list,
@@ -353,7 +356,7 @@ get_missed_entry(struct cache *cache, cache_key_t key,
  *
  * @sa reinit_entry
  */
-static void
+static struct cache_entry *
 reuse_ghost_entry(struct cache *cache, struct cache_entry *entry,
 		  unsigned idx, struct cache_search *cs)
 {
@@ -381,6 +384,7 @@ reuse_ghost_entry(struct cache *cache, struct cache_entry *entry,
 	remove_entry(cache, entry);
 	add_inflight(cache, entry, idx);
 	entry->state = cs_precious;
+	return entry;
 }
 
 /**  Get the ghost entry for a given key.
@@ -390,13 +394,13 @@ reuse_ghost_entry(struct cache *cache, struct cache_entry *entry,
  * @param cs     Cache search info.
  * @returns      Ghost entry, or @c NULL if not found.
  *
- * If no entry is found (function returns @c NULL), the @c epreca and
+ * If no entry is found (function returns @c NULL), the @c eprec and
  * @c eprobe fields in @ref cs are updated. Otherwise (if an entry is
  * found), their values are undefined.
  */
 static struct cache_entry *
-get_ghost_entry(struct cache *cache, cache_key_t key,
-		struct cache_search *cs)
+get_ghost_or_missed_entry(struct cache *cache, cache_key_t key,
+			  struct cache_search *cs)
 {
 	struct cache_entry *entry;
 	unsigned n, idx;
@@ -415,8 +419,7 @@ get_ghost_entry(struct cache *cache, cache_key_t key,
 			else
 				cache->dprobe = 0;
 			--cache->ngprec;
-			reuse_ghost_entry(cache, entry, idx, cs);
-			return entry;
+			return reuse_ghost_entry(cache, entry, idx, cs);
 		}
 		idx = entry->next;
 	}
@@ -437,14 +440,13 @@ get_ghost_entry(struct cache *cache, cache_key_t key,
 				cache->dprobe = cache->cap;
 			--cache->ngprobe;
 			--cache->nprobetotal;
-			reuse_ghost_entry(cache, entry, idx, cs);
-			return entry;
+			return reuse_ghost_entry(cache, entry, idx, cs);
 		}
 		idx = entry->prev;
 	}
 	cs->eprobe = idx;
 
-	return NULL;
+	return get_missed_entry(cache, key, cs);
 }
 
 /**  Get the in-flight entry for a given key.
@@ -493,10 +495,8 @@ cache_get_entry_noref(struct cache *cache, cache_key_t key)
 	idx = cache->ce[cache->split].next;
 	while (n--) {
 		entry = &cache->ce[idx];
-		if (entry->key == key) {
-			reuse_cached_entry(cache, entry, idx);
-			return entry;
-		}
+		if (entry->key == key)
+			return reuse_cached_entry(cache, entry, idx);
 		if (entry->refcnt == 0) {
 			cs.uprec = idx;
 			++cs.nuprec;
@@ -514,8 +514,7 @@ cache_get_entry_noref(struct cache *cache, cache_key_t key)
 			--cache->nprobe;
 			++cache->nprec;
 			--cache->nprobetotal;
-			reuse_cached_entry(cache, entry, idx);
-			return entry;
+			return reuse_cached_entry(cache, entry, idx);
 		}
 		if (entry->refcnt == 0) {
 			cs.uprobe = idx;
@@ -533,12 +532,9 @@ cache_get_entry_noref(struct cache *cache, cache_key_t key)
 			cache->ninflight;
 		if (inuse >= cache->cap)
 			return NULL;
-	}
 
-	if (!entry)
-		entry = get_ghost_entry(cache, key, &cs);
-	if (!entry)
-		entry = get_missed_entry(cache, key, &cs);
+		entry = get_ghost_or_missed_entry(cache, key, &cs);
+	}
 
 	++cache->misses.number;
 
@@ -646,21 +642,19 @@ cache_discard(struct cache *cache, struct cache_entry *entry)
 		return;
 	if (entry->state == cs_probe)
 		--cache->nprobetotal;
+	--cache->ninflight;
 
 	idx = entry - cache->ce;
-	if (cache->ninflight--) {
-		if (cache->inflight == idx)
-			cache->inflight = entry->next;
-		remove_entry(cache, entry);
-	}
+	if (cache->inflight == idx)
+		cache->inflight = entry->next;
+	remove_entry(cache, entry);
 
-	n = cache->nprobe + cache->ngprobe;
 	eprobe = cache->split;
-	while (n--)
-		eprobe = cache->ce[eprobe].prev;
-
-	if (eprobe == cache->split)
+	n = cache->nprobe + cache->ngprobe;
+	if (!n)
 		cache->split = idx;
+	else while (n--)
+		eprobe = cache->ce[eprobe].prev;
 
 	add_entry_after(cache, entry, idx, eprobe);
 }
