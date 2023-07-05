@@ -154,6 +154,9 @@ INTERNAL_DECL(addrxlat_status, get_cache_buf,
 	      (addrxlat_ctx_t *ctx, const addrxlat_fulladdr_t *addr,
 	       addrxlat_buffer_t **pbuf));
 
+INTERNAL_DECL(bool, direct_read_ok,
+	      (addrxlat_ctx_t *ctx, const addrxlat_fulladdr_t *addr));
+
 INTERNAL_DECL(addrxlat_status, read32,
 	      (addrxlat_step_t *step, const addrxlat_fulladdr_t *addr,
 	       uint32_t *val, const char *what));
@@ -239,8 +242,8 @@ pteval_shift(addrxlat_pte_format_t fmt)
 {
 	switch (fmt) {
 	case ADDRXLAT_PTE_PFN32:
+	case ADDRXLAT_PTE_ARM:
 	case ADDRXLAT_PTE_IA32:
-	case ADDRXLAT_PTE_AARCH32:
 		return 2;
 
 	case ADDRXLAT_PTE_PFN64:
@@ -303,11 +306,11 @@ read_pte64(addrxlat_step_t *step, addrxlat_pte_t *pte)
 
 INTERNAL_DECL(addrxlat_status, pgt_huge_page, (addrxlat_step_t *state));
 
-INTERNAL_DECL(addrxlat_next_step_fn, pgt_aarch32, );
-
 INTERNAL_DECL(addrxlat_next_step_fn, pgt_aarch64, );
 INTERNAL_DECL(addrxlat_next_step_fn, pgt_aarch64_lpa, );
 INTERNAL_DECL(addrxlat_next_step_fn, pgt_aarch64_lpa2, );
+
+INTERNAL_DECL(addrxlat_next_step_fn, pgt_arm, );
 
 INTERNAL_DECL(addrxlat_next_step_fn, pgt_ia32, );
 
@@ -451,13 +454,10 @@ struct os_init_data {
 typedef addrxlat_status sys_arch_fn(struct os_init_data *ctl);
 
 INTERNAL_DECL(sys_arch_fn, sys_aarch64, );
-
+INTERNAL_DECL(sys_arch_fn, sys_arm, );
 INTERNAL_DECL(sys_arch_fn, sys_ia32, );
-
 INTERNAL_DECL(sys_arch_fn, sys_ppc64, );
-
 INTERNAL_DECL(sys_arch_fn, sys_s390x, );
-
 INTERNAL_DECL(sys_arch_fn, sys_x86_64, );
 
 /** Optional action associated with a translation system region. */
