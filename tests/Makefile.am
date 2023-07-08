@@ -209,6 +209,7 @@ test_scripts = \
 	elf-empty-s390x \
 	elf-empty-x86_64 \
 	elf-prstatus-aarch64 \
+	elf-prstatus-arm \
 	elf-prstatus-i386 \
 	elf-prstatus-ppc64 \
 	elf-prstatus-s390x \
@@ -265,6 +266,7 @@ test_scripts = \
 	xlat-linux-aarch64-5.8-va48-nover \
 	xlat-linux-aarch64-5.16-64k \
 	xlat-linux-arm-2.6.24 \
+	xlat-linux-arm-2.6.24-kvaddr \
 	xlat-linux-ia32 \
 	xlat-linux-ia32-pae \
 	xlat-linux-ppc64-64k \
@@ -326,6 +328,7 @@ dist_check_DATA = \
 	early-version-code.expect \
 	elf-empty.data \
 	elf-prstatus-aarch64.data \
+	elf-prstatus-arm.data \
 	elf-prstatus-i386.data \
 	elf-prstatus-ppc64.data \
 	elf-prstatus-s390x.data \
@@ -386,8 +389,11 @@ dist_check_DATA = \
 	xlat-linux-aarch64-5.16-64k.data \
 	xlat-linux-aarch64-5.16-64k.expect \
 	xlat-linux-aarch64-5.16-64k.sym \
+	xlat-linux-arm-2.6.24.data \
 	xlat-linux-arm-2.6.24.expect \
 	xlat-linux-arm-2.6.24.sym \
+	xlat-linux-arm-2.6.24-kvaddr.expect \
+	xlat-linux-arm-2.6.24-kvaddr.sym \
 	xlat-linux-ia32.data \
 	xlat-linux-ia32.expect \
 	xlat-linux-ia32-pae.data \

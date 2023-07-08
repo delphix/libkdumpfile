@@ -96,6 +96,7 @@
 
 /* General macros */
 #define ARRAY_SIZE(arr) (sizeof(arr) / sizeof((arr)[0]))
+#define sizeof_field(type, member) sizeof((((type *)0)->member))
 
 /** Bits per byte.
  * Use this instead of a magic constant to illustrate why something
@@ -739,6 +740,7 @@ INTERNAL_DECL(kdump_status, linux_iomem_kcode,
 /* Architectures */
 
 INTERNAL_DECL(extern const struct arch_ops, aarch64_ops, );
+INTERNAL_DECL(extern const struct arch_ops, arm_ops, );
 INTERNAL_DECL(extern const struct arch_ops, ia32_ops, );
 INTERNAL_DECL(extern const struct arch_ops, s390x_ops, );
 INTERNAL_DECL(extern const struct arch_ops, x86_64_ops, );
@@ -812,6 +814,15 @@ struct derived_attr_def {
 	/** Length in bytes. */
 	unsigned short length;
 };
+
+#define DERIVED_NUMBER(k, d, t, f) {	\
+	{ .key = k,			\
+	  { .depth = d },		\
+	  .type = KDUMP_NUMBER		\
+	},				\
+	.offset = offsetof(t, f),	\
+	.length = sizeof_field(t, f)	\
+}
 
 /** Get pointer to the definition of a derived attribute.
  *
