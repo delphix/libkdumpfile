@@ -521,30 +521,24 @@ diskdump_realloc_compressed(kdump_ctx_t *ctx, struct attr_data *attr)
 		: KDUMP_OK;
 }
 
+/** Read VMCOREINFO into its blob attribute.
+ * @param ctx   Dump file object.
+ * @param fidx  File index.
+ * @param off   VMCOREINFO file offset.
+ * @param size  VMCOREINFO size in bytes.
+ */
 static kdump_status
-read_vmcoreinfo(kdump_ctx_t *ctx, off_t off, size_t size)
+read_vmcoreinfo(kdump_ctx_t *ctx, unsigned fidx, off_t off, size_t size)
 {
-	struct fcache_chunk fch;
-	kdump_attr_value_t val;
-	kdump_status ret;
+	return read_blob_attr(ctx, fidx, off, size,
+			      GKI_linux_vmcoreinfo_raw, "VMCOREINFO");
+}
 
-	ret = fcache_get_chunk(ctx->shared->fcache, &fch, size, 0, off);
-	if (ret != KDUMP_OK)
-		return set_error(ctx, ret,
-				 "Cannot read %zu VMCOREINFO bytes at %llu",
-				 size, (unsigned long long) off);
-
-	val.blob = internal_blob_new_dup(fch.data, size);
-	if (!val.blob)
-		return set_error(ctx, KDUMP_ERR_SYSTEM,
-				 "Cannot allocate %s", "VMCOREINFO blob");
-	ret = set_attr(ctx, gattr(ctx, GKI_linux_vmcoreinfo_raw),
-		       ATTR_DEFAULT, &val);
-	if (ret != KDUMP_OK)
-		ret = set_error(ctx, ret, "Cannot set VMCOREINFO");
-
-	fcache_put_chunk(&fch);
-	return ret;
+static kdump_status
+read_eraseinfo(kdump_ctx_t *ctx, unsigned fidx, off_t off, size_t size)
+{
+	return read_blob_attr(ctx, fidx, off, size,
+			      GKI_file_eraseinfo_raw, "ERASEINFO");
 }
 
 /* This function also sets architecture */
@@ -678,9 +672,17 @@ parse_sub_hdr_32pack(struct setup_data *sdp, struct pfn_file_map *pdmap,
 		sdp->note_off = dump64toh(ctx, sh->offset_note);
 		sdp->note_sz = dump32toh(ctx, sh->size_note);
 	} else if (sdp->header_version >= 3) {
-		ret = read_vmcoreinfo(ctx,
+		ret = read_vmcoreinfo(ctx, pdmap->fidx,
 				      dump64toh(ctx, sh->offset_vmcoreinfo),
 				      dump32toh(ctx, sh->size_vmcoreinfo));
+		if (ret != KDUMP_OK)
+			return ret;
+	}
+
+	if (sdp->header_version >= 4) {
+		ret = read_eraseinfo(ctx, pdmap->fidx,
+				     dump64toh(ctx, sh->offset_eraseinfo),
+				     dump32toh(ctx, sh->size_eraseinfo));
 		if (ret != KDUMP_OK)
 			return ret;
 	}
@@ -715,9 +717,17 @@ parse_sub_hdr_32pad(struct setup_data *sdp, struct pfn_file_map *pdmap,
 		sdp->note_off = dump64toh(ctx, sh->offset_note);
 		sdp->note_sz = dump32toh(ctx, sh->size_note);
 	} else if (sdp->header_version >= 3) {
-		ret = read_vmcoreinfo(ctx,
+		ret = read_vmcoreinfo(ctx, pdmap->fidx,
 				      dump64toh(ctx, sh->offset_vmcoreinfo),
 				      dump32toh(ctx, sh->size_vmcoreinfo));
+		if (ret != KDUMP_OK)
+			return ret;
+	}
+
+	if (sdp->header_version >= 4) {
+		ret = read_eraseinfo(ctx, pdmap->fidx,
+				     dump64toh(ctx, sh->offset_eraseinfo),
+				     dump32toh(ctx, sh->size_eraseinfo));
 		if (ret != KDUMP_OK)
 			return ret;
 	}
@@ -877,9 +887,17 @@ read_sub_hdr_64(struct setup_data *sdp, struct pfn_file_map *pdmap)
 		sdp->note_off = dump64toh(ctx, subhdr.offset_note);
 		sdp->note_sz = dump64toh(ctx, subhdr.size_note);
 	} else if (sdp->header_version >= 3) {
-		ret = read_vmcoreinfo(ctx,
+		ret = read_vmcoreinfo(ctx, pdmap->fidx,
 				      dump64toh(ctx, subhdr.offset_vmcoreinfo),
 				      dump64toh(ctx, subhdr.size_vmcoreinfo));
+		if (ret != KDUMP_OK)
+			return ret;
+	}
+
+	if (sdp->header_version >= 4) {
+		ret = read_eraseinfo(ctx, pdmap->fidx,
+				     dump64toh(ctx, subhdr.offset_eraseinfo),
+				     dump64toh(ctx, subhdr.size_eraseinfo));
 		if (ret != KDUMP_OK)
 			return ret;
 	}
