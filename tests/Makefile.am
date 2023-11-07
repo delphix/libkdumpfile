@@ -197,9 +197,11 @@ test_scripts = \
 	diskdump-basic-lzo \
 	diskdump-basic-snappy \
 	diskdump-basic-zstd \
+	diskdump-flat-raw \
 	diskdump-multiread \
 	diskdump-excluded \
 	diskdump-split \
+	diskdump-split-flat \
 	diskdump-v6-arm \
 	diskdump-v6-ia32 \
 	early-version-code \

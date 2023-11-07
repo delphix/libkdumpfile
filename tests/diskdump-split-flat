@@ -1,7 +1,7 @@
 #! /bin/sh
 
 #
-# Check reading data from a split dump file
+# Check reading data from a flattened split dump file
 #
 
 mkdir -p out || exit 99
@@ -9,10 +9,12 @@ mkdir -p out || exit 99
 name=$( basename "$0" )
 dumpfile="out/${name}.dump"
 resultfile="out/${name}.result"
+name=${name%-flat}
 datafile="$srcdir/${name}.data"
 expectfile="$srcdir/${name}.expect"
 
 desc="
+flattened = yes
 version = 6
 arch_name = x86_64
 block_size = 4096
@@ -65,7 +67,7 @@ echo "Created split diskdump dump: $dumpfile.2"
 ./mkdiskdump "$dumpfile.3" <<EOF
 $desc
 start_pfn = 3
-end_pfn = 5
+end_pfn = 6
 DATA = $datafile
 EOF
 rc=$?
@@ -143,7 +145,7 @@ fi
 
 echo "Check combined page map"
 ./checkattr "$dumpfile.1" "$dumpfile.2" "$dumpfile.3" <<EOF
-file.pagemap = bitmap: 0x1e
+file.pagemap = bitmap: 0x3e
 memory.pagemap = bitmap: 0x3f
 EOF
 rc=$?
@@ -154,7 +156,7 @@ fi
 
 echo "Check combined page map with files out of order"
 ./checkattr "$dumpfile.2" "$dumpfile.3" "$dumpfile.1" <<EOF
-file.pagemap = bitmap: 0x1e
+file.pagemap = bitmap: 0x3e
 memory.pagemap = bitmap: 0x3f
 EOF
 rc=$?
@@ -165,7 +167,7 @@ fi
 
 echo "Check combined page map with one file missing"
 ./checkattr "$dumpfile.3" "$dumpfile.1" <<EOF
-file.pagemap = bitmap: 0x1a
+file.pagemap = bitmap: 0x3a
 memory.pagemap = bitmap: 0x3f
 EOF
 rc=$?

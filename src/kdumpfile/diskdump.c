@@ -50,6 +50,27 @@
 
 /** @cond TARGET_ABI */
 
+#define MDF_SIGNATURE		"makedumpfile"
+#define MDF_SIG_LEN		16
+#define MDF_TYPE_FLAT_HEADER	1
+#define MDF_VERSION_FLAT_HEADER	1
+#define MDF_HEADER_SIZE		4096
+
+/* Flattened format header. */
+struct makedumpfile_header {
+	char	signature[MDF_SIG_LEN];
+	int64_t	type;
+	int64_t	version;
+} __attribute__((packed));
+
+/* Flattened segment header */
+struct makedumpfile_data_header {
+        int64_t offset;
+        int64_t buf_size;
+} __attribute__((packed));
+
+#define MDF_OFFSET_END_FLAG	(-(int64_t)1)
+
 /* The header is architecture-dependent, unfortunately */
 struct disk_dump_header_32 {
 	char			signature[SIG_LEN];	/* = "DISKDUMP" */
@@ -179,10 +200,6 @@ struct page_desc {
 };
 
 struct disk_dump_priv {
-	/** Overridden methods for arch.page_size attribute. */
-	struct attr_override page_size_override;
-	int cbuf_slot;		/**< Compressed data per-context slot. */
-
 	/** Number of split files in this dump. */
 	unsigned num_files;
 
@@ -197,6 +214,12 @@ struct disk_dump_priv {
 
 	/** Memory region mapping. */
 	struct pfn_file_map mem_pagemap;
+
+	/** File offset mapping for flattened files. */
+	addrxlat_map_t **flatmap;
+
+	/** Differences between flattened and rearranged file offsets. */
+	off_t **flatoffs;
 
 	/** Page descriptor mapping. */
 	struct pfn_file_map pdmap[];
@@ -225,6 +248,138 @@ struct setup_data {
 		)
 
 static void diskdump_cleanup(struct kdump_shared *shared);
+
+/** Read buffer from a flattened dump file.
+ * @param ctx   Dump file object.
+ * @param buf   Target I/O buffer.
+ * @param len   Length of data.
+ * @param fidx  Index of the file to read from.
+ * @param pos   File position.
+ * @returns     Error status.
+ *
+ * Read data from the flattened segment(s) which contain(s) @p len bytes
+ * at position @p pos after rearrangement.
+ */
+static kdump_status
+flattened_pread(kdump_ctx_t *ctx, void *buf, size_t len,
+		unsigned fidx, off_t pos)
+{
+	struct disk_dump_priv *ddp = ctx->shared->fmtdata;
+	const addrxlat_range_t *range, *end;
+	off_t off;
+
+	range = addrxlat_map_ranges(ddp->flatmap[fidx]);
+	end = range + addrxlat_map_len(ddp->flatmap[fidx]);
+	for (off = pos; range < end && off > range->endoff; ++range)
+		off -= range->endoff + 1;
+	while (range < end && len) {
+		size_t seglen;
+
+		seglen = range->endoff + 1 - off;
+		if (seglen > len)
+			seglen = len;
+
+		if (range->meth != ADDRXLAT_SYS_METH_NONE) {
+			off_t *flatoffs = ddp->flatoffs[fidx];
+			kdump_status ret;
+
+			ret = fcache_pread(ctx->shared->fcache, buf, seglen,
+					   fidx, pos + flatoffs[range->meth]);
+			if (ret != KDUMP_OK)
+				return ret;
+		} else
+			memset(buf, 0, seglen);
+
+		buf += seglen;
+		len -= seglen;
+		pos += seglen;
+		++range;
+		off = 0;
+	}
+
+	if (len)
+		memset(buf, 0, len);
+	return KDUMP_OK;
+}
+
+/** Read buffer from a diskdump file.
+ * @param ctx   Dump file object.
+ * @param buf   Target I/O buffer.
+ * @param len   Length of data.
+ * @param fidx  Index of the file to read from.
+ * @param pos   File position.
+ * @returns     Error status.
+ *
+ * Read data from a diskdump file. If the file is flattened, interpret
+ * @p pos as if it was already rearranged.
+ */
+static inline kdump_status
+diskdump_pread(kdump_ctx_t *ctx, void *buf, size_t len,
+	       unsigned fidx, off_t pos)
+{
+	struct disk_dump_priv *ddp = ctx->shared->fmtdata;
+
+	return ddp->flatmap
+		? flattened_pread(ctx, buf, len, fidx, pos)
+		: fcache_pread(ctx->shared->fcache, buf, len, fidx, pos);
+}
+
+/** Get a contiguous data chunk from a flattened dump file.
+ * @param ctx   Dump file object.
+ * @param fch   File cache chunk, updated on success.
+ * @param len   Length of data.
+ * @param fidx  Index of the file to read from.
+ * @param pos   File position.
+ * @returns     Error status.
+ *
+ * Get a contiguous data chunk from a flattened dump file.
+ */
+static inline kdump_status
+flattened_get_chunk(kdump_ctx_t *ctx, struct fcache_chunk *fch,
+		    size_t len, unsigned fidx, off_t pos)
+{
+	struct disk_dump_priv *ddp = ctx->shared->fmtdata;
+	const addrxlat_range_t *range, *end;
+	off_t off;
+
+	range = addrxlat_map_ranges(ddp->flatmap[fidx]);
+	end = range + addrxlat_map_len(ddp->flatmap[fidx]);
+	for (off = pos; range < end && off > range->endoff; ++range)
+		off -= range->endoff + 1;
+	if (len <= range->endoff + 1 - off) {
+		pos += ddp->flatoffs[fidx][range->meth];
+		return fcache_get_chunk(ctx->shared->fcache, fch, len,
+					fidx, pos);
+	}
+
+	fch->data = malloc(len);
+	if (!fch->data)
+		return KDUMP_ERR_SYSTEM;
+	fch->nent = 0;
+	return flattened_pread(ctx, fch->data, len, fidx, pos);
+}
+
+/** Get a contiguous data chunk from a diskdump file.
+ * @param ctx   Dump file object.
+ * @param fch   File cache chunk, updated on success.
+ * @param len   Length of data.
+ * @param fidx  Index of the file to read from.
+ * @param pos   File position.
+ * @returns     Error status.
+ *
+ * Get a contiguous data chunk from a diskdump file. If the file is
+ * flattened, interpret @p pos as if it was already rearranged.
+ */
+static inline kdump_status
+diskdump_get_chunk(kdump_ctx_t *ctx, struct fcache_chunk *fch,
+		   size_t len, unsigned fidx, off_t pos)
+{
+	struct disk_dump_priv *ddp = ctx->shared->fmtdata;
+
+	return ddp->flatmap
+		? flattened_get_chunk(ctx, fch, len, fidx, pos)
+		: fcache_get_chunk(ctx->shared->fcache, fch, len, fidx, pos);
+}
 
 /** Convert a PFN to a page descriptor file offset.
  * @param pdmap  Page descriptor mapping.
@@ -360,9 +515,9 @@ diskdump_read_page(struct page_io *pio)
 	struct disk_dump_priv *ddp = ctx->shared->fmtdata;
 	kdump_pfn_t pfn;
 	const struct pfn_file_map *pdmap;
+	struct fcache_chunk fch;
 	struct page_desc pd;
 	off_t pd_pos;
-	void *buf;
 	kdump_status ret;
 
 	pfn = pio->addr.addr >> get_page_shift(ctx);
@@ -382,8 +537,8 @@ diskdump_read_page(struct page_io *pio)
 	}
 
 	mutex_lock(&ctx->shared->cache_lock);
-	ret = fcache_pread(ctx->shared->fcache, &pd, sizeof pd,
-			   pdmap->fidx, pd_pos);
+	ret = diskdump_pread(ctx, &pd, sizeof pd,
+			     pdmap->fidx, pd_pos);
 	mutex_unlock(&ctx->shared->cache_lock);
 	if (ret != KDUMP_OK)
 		return set_error(ctx, ret,
@@ -395,41 +550,42 @@ diskdump_read_page(struct page_io *pio)
 	pd.flags = dump32toh(ctx, pd.flags);
 	pd.page_flags = dump64toh(ctx, pd.page_flags);
 
+	/* read page data */
 	if (pd.flags & DUMP_DH_COMPRESSED) {
-		if (pd.size > MAX_PAGE_SIZE)
-			return set_error(ctx, KDUMP_ERR_CORRUPT,
-					 "Wrong compressed size: %lu",
-					 (unsigned long)pd.size);
-		buf = ctx->data[ddp->cbuf_slot];
+		mutex_lock(&ctx->shared->cache_lock);
+		ret = diskdump_get_chunk(ctx, &fch, pd.size,
+					 pdmap->fidx, pd.offset);
+		mutex_unlock(&ctx->shared->cache_lock);
 	} else {
 		if (pd.size != get_page_size(ctx))
 			return set_error(ctx, KDUMP_ERR_CORRUPT,
-					 "Wrong page size: %lu",
-					 (unsigned long)pd.size);
-		buf = pio->chunk.data;
+					 "Wrong page size: %"PRIu32,
+					 pd.size);
+		mutex_lock(&ctx->shared->cache_lock);
+		ret = diskdump_pread(ctx, pio->chunk.data, pd.size,
+				     pdmap->fidx, pd.offset);
+		mutex_unlock(&ctx->shared->cache_lock);
 	}
 
-	/* read page data */
-	mutex_lock(&ctx->shared->cache_lock);
-	ret = fcache_pread(ctx->shared->fcache, buf, pd.size,
-			   pdmap->fidx, pd.offset);
-	mutex_unlock(&ctx->shared->cache_lock);
 	if (ret != KDUMP_OK)
 		return set_error(ctx, ret,
 				 "Cannot read page data at %llu",
 				 (unsigned long long) pd.offset);
 
 	if (pd.flags & DUMP_DH_COMPRESSED_ZLIB) {
-		ret = uncompress_page_gzip(ctx, pio->chunk.data, buf, pd.size);
+		ret = uncompress_page_gzip(ctx, pio->chunk.data,
+					   fch.data, pd.size);
+		fcache_put_chunk(&fch);
 		if (ret != KDUMP_OK)
 			return ret;
 	} else if (pd.flags & DUMP_DH_COMPRESSED_LZO) {
 #if USE_LZO
 		lzo_uint retlen = get_page_size(ctx);
-		int ret = lzo1x_decompress_safe((lzo_bytep)buf, pd.size,
-						(lzo_bytep)pio->chunk.data,
+		int ret = lzo1x_decompress_safe(fch.data, pd.size,
+						pio->chunk.data,
 						&retlen,
 						LZO1X_MEM_DECOMPRESS);
+		fcache_put_chunk(&fch);
 		if (ret != LZO_E_OK)
 			return set_error(ctx, KDUMP_ERR_CORRUPT,
 					 "Decompression failed: %d", ret);
@@ -446,8 +602,9 @@ diskdump_read_page(struct page_io *pio)
 #if USE_SNAPPY
 		size_t retlen = get_page_size(ctx);
 		snappy_status ret;
-		ret = snappy_uncompress((char *)buf, pd.size,
-					(char *)pio->chunk.data, &retlen);
+		ret = snappy_uncompress(fch.data, pd.size,
+					pio->chunk.data, &retlen);
+		fcache_put_chunk(&fch);
 		if (ret != SNAPPY_OK)
 			return set_error(ctx, KDUMP_ERR_CORRUPT,
 					 "Decompression failed: %d",
@@ -465,7 +622,8 @@ diskdump_read_page(struct page_io *pio)
 #if USE_ZSTD
 		size_t ret;
 		ret = ZSTD_decompress(pio->chunk.data, get_page_size(ctx),
-				      buf, pd.size);
+				      fch.data, pd.size);
+		fcache_put_chunk(&fch);
 		if (ZSTD_isError(ret))
 			return set_error(ctx, KDUMP_ERR_CORRUPT,
 					 "Decompression failed: %s",
@@ -487,38 +645,6 @@ static kdump_status
 diskdump_get_page(struct page_io *pio)
 {
 	return cache_get_page(pio, diskdump_read_page);
-}
-
-/** Reallocate buffer for compressed data.
- * @param ctx   Dump file object.
- * @param attr  "arch.page_size" attribute.
- * @returns     Error status.
- *
- * This function is used as a post-set handler for @c arch.page_size
- * to ensure that there is always a sufficiently large buffer for
- * compressed pages.
- */
-static kdump_status
-diskdump_realloc_compressed(kdump_ctx_t *ctx, struct attr_data *attr)
-{
-	const struct attr_ops *parent_ops;
-	struct disk_dump_priv *ddp;
-	int newslot;
-
-	newslot = per_ctx_alloc(ctx->shared, attr_value(attr)->number);
-	if (newslot < 0)
-		return set_error(ctx, KDUMP_ERR_SYSTEM,
-				 "Cannot allocate buffer for compressed data");
-
-	ddp = ctx->shared->fmtdata;
-	if (ddp->cbuf_slot >= 0)
-		per_ctx_free(ctx->shared, ddp->cbuf_slot);
-	ddp->cbuf_slot = newslot;
-
-	parent_ops = ddp->page_size_override.template.parent->ops;
-	return (parent_ops && parent_ops->post_set)
-		? parent_ops->post_set(ctx, attr)
-		: KDUMP_OK;
 }
 
 /** Read VMCOREINFO into its blob attribute.
@@ -548,7 +674,7 @@ read_notes(kdump_ctx_t *ctx, off_t off, size_t size)
 	struct fcache_chunk fch;
 	kdump_status ret;
 
-	ret = fcache_get_chunk(ctx->shared->fcache, &fch, size, 0, off);
+	ret = diskdump_get_chunk(ctx, &fch, size, 0, off);
 	if (ret != KDUMP_OK)
 		return set_error(ctx, ret,
 				 "Cannot read %zu note bytes at %llu",
@@ -609,8 +735,7 @@ read_bitmap(kdump_ctx_t *ctx, struct pfn_file_map *pdmap,
 	if (get_max_pfn(ctx) > max_bitmap_pfn)
 		set_max_pfn(ctx, max_bitmap_pfn);
 
-	ret = fcache_get_chunk(ctx->shared->fcache,
-			       &fch, bitmapsize, pdmap->fidx, off);
+	ret = diskdump_get_chunk(ctx, &fch, bitmapsize, pdmap->fidx, off);
 	if (ret != KDUMP_OK)
 		return set_error(ctx, ret,
 				 "Cannot read %zu bytes of page bitmap"
@@ -769,8 +894,8 @@ read_sub_hdr_32(struct setup_data *sdp, struct pfn_file_map *pdmap)
 	if (sdp->header_version < 1)
 		return KDUMP_OK;
 
-	ret = fcache_pread(ctx->shared->fcache, &subhdr, sizeof subhdr,
-			   pdmap->fidx, get_page_size(ctx));
+	ret = diskdump_pread(ctx, &subhdr, sizeof subhdr,
+			     pdmap->fidx, get_page_size(ctx));
 	if (ret != KDUMP_OK)
 		return set_error(ctx, ret,
 				 "Cannot read subheader");
@@ -808,8 +933,8 @@ do_header_32(struct setup_data *sdp, struct disk_dump_header_32 *dh,
 		struct pfn_file_map *pdmap = &ddp->pdmap[fidx];
 		pdmap->fidx = fidx;
 
-		ret = fcache_pread(ctx->shared->fcache, dh, sizeof *dh,
-				   fidx, 0);
+		ret = diskdump_pread(ctx, dh, sizeof *dh,
+				     fidx, 0);
 		if (ret != KDUMP_OK) {
 			ret = set_error(ctx, ret, "Cannot read header");
 			break;
@@ -875,8 +1000,8 @@ read_sub_hdr_64(struct setup_data *sdp, struct pfn_file_map *pdmap)
 	if (sdp->header_version < 1)
 		return KDUMP_OK;
 
-	ret = fcache_pread(ctx->shared->fcache, &subhdr, sizeof subhdr,
-			   pdmap->fidx, get_page_size(ctx));
+	ret = diskdump_pread(ctx, &subhdr, sizeof subhdr,
+			     pdmap->fidx, get_page_size(ctx));
 	if (ret != KDUMP_OK)
 		return set_error(ctx, ret,
 				 "Cannot read subheader");
@@ -937,8 +1062,8 @@ do_header_64(struct setup_data *sdp, struct disk_dump_header_64 *dh,
 		struct pfn_file_map *pdmap = &ddp->pdmap[fidx];
 		pdmap->fidx = fidx;
 
-		ret = fcache_pread(ctx->shared->fcache, dh, sizeof *dh,
-				   fidx, 0);
+		ret = diskdump_pread(ctx, dh, sizeof *dh,
+				     fidx, 0);
 		if (ret != KDUMP_OK) {
 			ret = set_error(ctx, ret, "Cannot read header");
 			break;
@@ -999,9 +1124,8 @@ mem_pagemap_revalidate(kdump_ctx_t *ctx, struct attr_data *attr)
 	kdump_pfn_t maxpfn;
 	kdump_status status;
 
-	status = fcache_get_chunk(ctx->shared->fcache, &fch,
-				  ddp->mem_pagemap_size, 0,
-				  ddp->mem_pagemap_off);
+	status = diskdump_get_chunk(ctx, &fch, ddp->mem_pagemap_size,
+				    0, ddp->mem_pagemap_off);
 	if (status != KDUMP_OK)
 		return set_error(ctx, status,
 				 "Cannot read %zu bytes of page bitmap"
@@ -1046,18 +1170,17 @@ init_mem_pagemap(kdump_ctx_t *ctx)
 	return set_attr(ctx, attr, ATTR_INVALID, &val);
 }
 
+/** Initialize diskdump private data.
+ * @param ctx  Dump file object.
+ * @returns    Error status.
+ *
+ * Allocate and initialize diskdump format private data. The private data
+ * should be eventually cleaned up by @ref diskdump_cleanup().
+ */
 static kdump_status
-open_common(kdump_ctx_t *ctx, void *hdr)
+init_private(kdump_ctx_t *ctx)
 {
-	struct disk_dump_header_32 *dh32 = hdr;
-	struct disk_dump_header_64 *dh64 = hdr;
 	struct disk_dump_priv *ddp;
-	struct setup_data sd;
-	kdump_bmp_t *bmp;
-	kdump_status ret;
-
-	memset(&sd, 0, sizeof sd);
-	sd.ctx = ctx;
 
 	ddp = calloc(1, sizeof(*ddp) +
 		     get_num_files(ctx) * sizeof(ddp->pdmap[0]));
@@ -1066,12 +1189,22 @@ open_common(kdump_ctx_t *ctx, void *hdr)
 				 "Cannot allocate diskdump private data");
 	ddp->num_files = get_num_files(ctx);
 
-	attr_add_override(gattr(ctx, GKI_page_size),
-			  &ddp->page_size_override);
-	ddp->page_size_override.ops.post_set = diskdump_realloc_compressed;
-	ddp->cbuf_slot = -1;
-
 	ctx->shared->fmtdata = ddp;
+	return KDUMP_OK;
+}
+
+static kdump_status
+open_common(kdump_ctx_t *ctx, void *hdr)
+{
+	struct disk_dump_priv *ddp = ctx->shared->fmtdata;;
+	struct disk_dump_header_32 *dh32 = hdr;
+	struct disk_dump_header_64 *dh64 = hdr;
+	struct setup_data sd;
+	kdump_bmp_t *bmp;
+	kdump_status ret;
+
+	memset(&sd, 0, sizeof sd);
+	sd.ctx = ctx;
 
 	set_addrspace_caps(ctx->xlat, ADDRXLAT_CAPS(ADDRXLAT_MACHPHYSADDR));
 
@@ -1122,28 +1255,178 @@ open_common(kdump_ctx_t *ctx, void *hdr)
 	return ret;
 }
 
+#define FLATOFFS_ALLOC_INC	32
+
+/** Initialize flattened dump maps for one file.
+ * @param ctx   Dump file object.
+ * @param fidx  File index.
+ * @returns     Error status.
+ *
+ * Read all flattened segment headers from file @p fidx and initialize
+ * @p flatmap and @p flatoffs.
+ */
+static kdump_status
+init_flattened_file(kdump_ctx_t *ctx, unsigned fidx)
+{
+	struct disk_dump_priv *ddp = ctx->shared->fmtdata;
+	struct makedumpfile_data_header hdr;
+	addrxlat_map_t *flatmap;
+	off_t *flatoffs = NULL;
+	addrxlat_range_t range;
+	int64_t pos, size;
+	unsigned segidx;
+	off_t flatpos;
+	kdump_status status;
+
+	flatmap = addrxlat_map_new();
+	if (!flatmap)
+		return set_error(ctx, KDUMP_ERR_SYSTEM,
+				 "Cannot allocate %s", "flattened map");
+	ddp->flatmap[fidx] = flatmap;
+
+	segidx = 0;
+	flatpos = MDF_HEADER_SIZE;
+	for (;;) {
+		status = fcache_pread(ctx->shared->fcache, &hdr, sizeof(hdr),
+				      fidx, flatpos);
+		if (status != KDUMP_OK)
+			return set_error(ctx, status,
+					 "Cannot read flattened header at %llu",
+					 (unsigned long long) flatpos);
+		pos = be64toh(hdr.offset);
+		if (pos == MDF_OFFSET_END_FLAG)
+			break;
+                if (pos < 0)
+			return set_error(ctx, KDUMP_ERR_CORRUPT,
+					 "Wrong flattened %s %"PRId64" at %llu",
+					 "offset", pos,
+					 (unsigned long long) flatpos);
+		size = be64toh(hdr.buf_size);
+		if (size <= 0)
+			return set_error(ctx, KDUMP_ERR_CORRUPT,
+					 "Wrong flattened %s %"PRId64" at %llu",
+					 "segment size", size,
+					 (unsigned long long) flatpos);
+
+		if ((segidx % FLATOFFS_ALLOC_INC) == 0) {
+			unsigned newlen = segidx + FLATOFFS_ALLOC_INC;
+
+			flatoffs = realloc(flatoffs,
+					 sizeof(*flatoffs) * newlen);
+			if (!flatoffs)
+				return set_error(ctx, KDUMP_ERR_SYSTEM,
+						 "Cannot allocate %s",
+						 "flattened offset array");
+			ddp->flatoffs[fidx] = flatoffs;
+		}
+		flatpos += sizeof(hdr);
+		flatoffs[segidx] = flatpos - pos;
+
+		range.endoff = size - 1;
+		range.meth = segidx;
+		if (addrxlat_map_set(flatmap, pos, &range) != ADDRXLAT_OK)
+			return set_error(ctx, KDUMP_ERR_SYSTEM,
+					 "Cannot allocate %s",
+					 "flattened map entry");
+
+		++segidx;
+		flatpos += size;
+	}
+	return KDUMP_OK;
+}
+
+/** Initialize flattened dump maps for all files.
+ * @param ctx  Dump file object.
+ * @returns    Error status.
+ *
+ * Initialize flattened dump maps for all files.
+ */
+static kdump_status
+init_flattened_maps(kdump_ctx_t *ctx)
+{
+	struct disk_dump_priv *ddp = ctx->shared->fmtdata;
+	unsigned fidx;
+	kdump_status status;
+
+	ddp->flatmap = calloc(ddp->num_files, sizeof(addrxlat_map_t *));
+	if (!ddp->flatmap)
+		return set_error(ctx, KDUMP_ERR_SYSTEM,
+				 "Cannot allocate %s", "flatmap array");
+	ddp->flatoffs = calloc(ddp->num_files, sizeof(off_t *));
+	if (!ddp->flatoffs)
+		return set_error(ctx, KDUMP_ERR_SYSTEM,
+				 "Cannot allocate %s", "flatoffs array");
+
+	for (fidx = 0; fidx < get_num_files(ctx); ++fidx) {
+		status = init_flattened_file(ctx, fidx);
+		if (status != KDUMP_OK)
+			return set_error(ctx, status,
+					 "Cannot rearrange file #%u", fidx);
+	}
+
+	return KDUMP_OK;
+}
+
 static kdump_status
 diskdump_probe(kdump_ctx_t *ctx)
 {
+	static const char magic_flattened[MDF_SIG_LEN] = MDF_SIGNATURE;
 	static const char magic_diskdump[] =
 		{ 'D', 'I', 'S', 'K', 'D', 'U', 'M', 'P' };
 	static const char magic_kdump[] =
 		{ 'K', 'D', 'U', 'M', 'P', ' ', ' ', ' ' };
 
 	char hdr[sizeof(struct disk_dump_header_64)];
+	char desc[32];
 	kdump_status status;
 
 	status = fcache_pread(ctx->shared->fcache, hdr, sizeof hdr, 0, 0);
 	if (status != KDUMP_OK)
 		return set_error(ctx, status, "Cannot read dump header");
 
+	if (!memcmp(hdr, magic_flattened, sizeof magic_flattened)) {
+		struct makedumpfile_header *flathdr =
+			(struct makedumpfile_header*) hdr;
+
+		if (be64toh(flathdr->type) != MDF_TYPE_FLAT_HEADER)
+			return set_error(ctx, KDUMP_ERR_NOTIMPL,
+					 "Unknown flattened %s: %" PRId64 "\n",
+					 "type", be64toh(flathdr->type));
+		if (be64toh(flathdr->version) != MDF_VERSION_FLAT_HEADER)
+			return set_error(ctx, KDUMP_ERR_NOTIMPL,
+					 "Unknown flattened %s: %" PRId64 "\n",
+					 "version", be64toh(flathdr->version));
+
+		status = init_private(ctx);
+		if (status != KDUMP_OK)
+			return status;
+
+		status = init_flattened_maps(ctx);
+		if (status != KDUMP_OK)
+			return status;
+
+		status = flattened_pread(ctx, &hdr, sizeof hdr, 0, 0);
+		if (status != KDUMP_OK)
+			return set_error(ctx, status, "Cannot read dump header");
+		strcpy(desc, "Flattened ");
+	} else
+		desc[0] = '\0';
+
 	if (!memcmp(hdr, magic_diskdump, sizeof magic_diskdump))
-		set_file_description(ctx, "Diskdump");
+		strcat(desc, "Diskdump");
 	else if (!memcmp(hdr, magic_kdump, sizeof magic_kdump))
-		set_file_description(ctx, "Compressed KDUMP");
+		strcat(desc, "Compressed KDUMP");
 	else
 		return set_error(ctx, KDUMP_NOPROBE,
 				 "Unrecognized diskdump signature");
+
+	set_file_description(ctx, desc);
+
+	if (!ctx->shared->fmtdata) {
+		status = init_private(ctx);
+		if (status != KDUMP_OK)
+			return status;
+	}
 
 	return open_common(ctx, hdr);
 }
@@ -1153,8 +1436,6 @@ diskdump_attr_cleanup(struct attr_dict *dict)
 {
 	struct disk_dump_priv *ddp = dict->shared->fmtdata;
 
-	attr_remove_override(dgattr(dict, GKI_page_size),
-			     &ddp->page_size_override);
 	attr_remove_override(dgattr(dict, GKI_memory_pagemap),
 			     &ddp->mem_pagemap_override);
 }
@@ -1171,8 +1452,22 @@ diskdump_cleanup(struct kdump_shared *shared)
 			if (pdmap->regions)
 				free(pdmap->regions);
 		}
-		if (ddp->cbuf_slot >= 0)
-			per_ctx_free(shared, ddp->cbuf_slot);
+		if (ddp->flatmap) {
+			for (fidx = 0; fidx < ddp->num_files; ++fidx) {
+				addrxlat_map_t *flatmap = ddp->flatmap[fidx];
+				if (flatmap)
+					addrxlat_map_decref(flatmap);
+			}
+			free(ddp->flatmap);
+		}
+		if (ddp->flatoffs) {
+			for (fidx = 0; fidx < ddp->num_files; ++fidx) {
+				off_t *flatoffs = ddp->flatoffs[fidx];
+				if (flatoffs)
+					free(flatoffs);
+			}
+			free(ddp->flatoffs);
+		}
 		free(ddp);
 		shared->fmtdata = NULL;
 	}

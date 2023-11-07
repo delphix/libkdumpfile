@@ -32,6 +32,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <ctype.h>
+#include <errno.h>
 
 #include "config.h"
 #include "testutil.h"
@@ -68,8 +69,6 @@ struct page_data_kdump {
 #if USE_LZO
 	lzo_bytep lzo_wrkmem;
 #endif
-
-	unsigned long skip;
 };
 
 static endian_t be;
@@ -91,6 +90,9 @@ struct data_block {
 	struct blob *blob;
 };
 
+static bool flattened;
+static unsigned long long flattened_type = MDF_TYPE_FLAT_HEADER;
+static unsigned long long flattened_version = MDF_VERSION_FLAT_HEADER;
 static char *arch_name;
 static unsigned long long compression;
 static char *signature;
@@ -134,6 +136,9 @@ static unsigned long start_pdidx;
 
 static const struct param param_array[] = {
 	/* meta-data */
+	PARAM_YESNO("flattened", flattened),
+	PARAM_NUMBER("flattened.type", flattened_type),
+	PARAM_NUMBER("flattened.version", flattened_version),
 	PARAM_STRING("arch_name", arch_name),
 	PARAM_NUMBER("compression", compression),
 
@@ -218,6 +223,29 @@ set_default_params(void)
 }
 
 static int
+write_chunk(FILE *f, off_t off, const void *ptr, size_t sz, const char *what)
+{
+	if (flattened) {
+		struct makedumpfile_data_header hdr = {
+			.offset = htobe64(off),
+			.buf_size = htobe64(sz),
+		};
+		if (fwrite(&hdr, sizeof hdr, 1, f) != 1) {
+			perror("flattened segment header");
+			return -1;
+		}
+	} else if (fseek(f, off, SEEK_SET) != 0) {
+		fprintf(stderr, "seek %s: %s\n", what, strerror(errno));
+		return -1;
+	}
+	if (fwrite(ptr, sz, 1, f) != 1) {
+		fprintf(stderr, "write %s: %s\n", what, strerror(errno));
+		return -1;
+	}
+	return 0;
+}
+
+static int
 writeheader_32(FILE *f)
 {
 	struct timeval tv;
@@ -226,7 +254,7 @@ writeheader_32(FILE *f)
 
 	if (gettimeofday(&tv, NULL) != 0) {
 		perror("gettimeofday");
-		return -1;
+		return TEST_ERR;
 	}
 
 	/* initialize dump header to zero */
@@ -259,15 +287,8 @@ writeheader_32(FILE *f)
 	hdr.current_cpu = htodump32(be, current_cpu);
 	hdr.nr_cpus = htodump32(be, nr_cpus);
 
-	if (fseek(f, 0, SEEK_SET) != 0) {
-		perror("seek header");
-		return -1;
-	}
-
-	if (fwrite(&hdr, sizeof hdr, 1, f) != 1) {
-		perror("write header");
-		return -1;
-	}
+	if (write_chunk(f, 0, &hdr, sizeof hdr, "header"))
+		return TEST_ERR;
 
 	subhdr.phys_base = htodump32(be, phys_base);
 	subhdr.dump_level = htodump32(be, dump_level);
@@ -290,17 +311,11 @@ writeheader_32(FILE *f)
 	subhdr.end_pfn_64 = htodump64(be, end_pfn);
 	subhdr.max_mapnr_64 = htodump64(be, max_mapnr);
 
-	if (fseek(f, DISKDUMP_HEADER_BLOCKS * block_size, SEEK_SET) != 0) {
-		perror("seek subheader");
-		return -1;
-	}
+	if (write_chunk(f, DISKDUMP_HEADER_BLOCKS * block_size,
+			&subhdr, sizeof subhdr, "subheader"))
+		return TEST_ERR;
 
-	if (fwrite(&subhdr, sizeof subhdr, 1, f) != 1) {
-		perror("write subheader");
-		return -1;
-	}
-
-	return 0;
+	return TEST_OK;
 }
 
 static int
@@ -312,7 +327,7 @@ writeheader_64(FILE *f)
 
 	if (gettimeofday(&tv, NULL) != 0) {
 		perror("gettimeofday");
-		return -1;
+		return TEST_ERR;
 	}
 
 	/* initialize dump header to zero */
@@ -345,15 +360,8 @@ writeheader_64(FILE *f)
 	hdr.current_cpu = htodump32(be, current_cpu);
 	hdr.nr_cpus = htodump32(be, nr_cpus);
 
-	if (fseek(f, 0, SEEK_SET) != 0) {
-		perror("seek header");
-		return -1;
-	}
-
-	if (fwrite(&hdr, sizeof hdr, 1, f) != 1) {
-		perror("write header");
-		return -1;
-	}
+	if (write_chunk(f, 0, &hdr, sizeof hdr, "header"))
+		return TEST_ERR;
 
 	subhdr.phys_base = htodump64(be, phys_base);
 	subhdr.dump_level = htodump32(be, dump_level);
@@ -376,17 +384,11 @@ writeheader_64(FILE *f)
 	subhdr.end_pfn_64 = htodump64(be, end_pfn);
 	subhdr.max_mapnr_64 = htodump64(be, max_mapnr);
 
-	if (fseek(f, DISKDUMP_HEADER_BLOCKS * block_size, SEEK_SET) != 0) {
-		perror("seek subheader");
-		return -1;
-	}
+	if (write_chunk(f, DISKDUMP_HEADER_BLOCKS * block_size,
+			&subhdr, sizeof subhdr, "subheader"))
+		return TEST_ERR;
 
-	if (fwrite(&subhdr, sizeof subhdr, 1, f) != 1) {
-		perror("write subheader");
-		return -1;
-	}
-
-	return 0;
+	return TEST_OK;
 }
 
 static int
@@ -409,23 +411,10 @@ parseheader(struct page_data *pg, char *p)
 
 	pgkdump->flags = 0;
 	pgkdump->compress = compress_auto;
-	pgkdump->skip = 0;
 
 	p = endp;
 	while (*p && isspace(*p))
 		++p;
-
-	if (!strncmp(p, "skip=", 5)) {
-		p += 5;
-		pgkdump->skip = strtoul(p, &endp, 0);
-		if (*endp && !isspace(*endp)) {
-			fprintf(stderr, "Invalid skip: %s\n", p);
-			return TEST_FAIL;
-		}
-		p = endp;
-		while (*p && isspace(*p))
-			++p;
-	}
 
 	if (!*p)
 		return TEST_OK;
@@ -682,35 +671,18 @@ writepage(struct page_data *pg)
 		buf = pg->buf;
 	}
 	pd.offset = htodump64(be, dataoff);
-	pd.size = htodump32(be, buflen + pgkdump->skip);
+	pd.size = htodump32(be, buflen);
 	pd.flags = htodump32(be, flags);
 	pd.page_flags = htodump64(be, 0);
 
 	pdidx = bitmap_index(bitmap2, pfn) - start_pdidx;
-	if (fseek(pgkdump->f, pdoff + pdidx * sizeof pd, SEEK_SET) != 0) {
-		perror("seek page desc");
+	if (write_chunk(pgkdump->f, pdoff + pdidx * sizeof pd,
+			&pd, sizeof pd, "page desc"))
 		return TEST_ERR;
-	}
-	if (fwrite(&pd, sizeof pd, 1, pgkdump->f) != 1) {
-		perror("write page desc");
-		return TEST_ERR;
-	}
 
-	if (fseek(pgkdump->f, dataoff, SEEK_SET) != 0) {
-		perror("seek page data");
+	if (write_chunk(pgkdump->f, dataoff, buf, buflen, "page data"))
 		return TEST_ERR;
-	}
-	if (fwrite(buf, 1, buflen, pgkdump->f) != buflen) {
-		perror("write page data");
-		return TEST_ERR;
-	}
 	dataoff += buflen;
-
-	if (pgkdump->skip &&
-	    fseek(pgkdump->f, pgkdump->skip, SEEK_CUR) != 0) {
-		perror("skip page data");
-		return TEST_ERR;
-	}
 
 	return TEST_OK;
 }
@@ -724,7 +696,7 @@ writedata(FILE *f)
 	int rc;
 
 	if (!data_file)
-		return TEST_OK;
+		return writeheader(f);
 
 	pgkdump.f = f;
 	pgkdump.addr = 0;
@@ -779,18 +751,17 @@ writedata(FILE *f)
 	if (rc != TEST_OK)
 		goto out_bitmap2;
 
-	if (fseek(f, (1 + sub_hdr_size) * block_size, SEEK_SET) != 0) {
-		perror("seek bitmap");
+	rc = writeheader(f);
+	if (rc != TEST_OK)
+		goto out_bitmap2;
+
+	if (write_chunk(f, (1 + sub_hdr_size) * block_size,
+			bitmap1, block_size * bmp_blocks1, "1st bitmap")) {
 		rc = TEST_ERR;
 		goto out_bitmap2;
 	}
-	if (fwrite(bitmap1, block_size, bmp_blocks1, f) != bmp_blocks1) {
-		perror("write 1st bitmap");
-		rc = TEST_ERR;
-		goto out_bitmap2;
-	}
-	if (fwrite(bitmap2, block_size, bmp_blocks1, f) != bmp_blocks1) {
-		perror("write 2nd bitmap");
+	if (write_chunk(f, (1 + sub_hdr_size + bmp_blocks1) * block_size,
+			bitmap2, block_size * bmp_blocks1, "2nd bitmap")) {
 		rc = TEST_ERR;
 		goto out_bitmap2;
 	}
@@ -827,13 +798,41 @@ writedump(FILE *f)
 {
 	int rc;
 
+	if (flattened) {
+		struct makedumpfile_header hdr = {
+			.signature = MDF_SIGNATURE,
+			.type = htobe64(flattened_type),
+			.version = htobe64(flattened_version),
+		};
+		size_t remain;
+
+		if (fwrite(&hdr, sizeof hdr, 1, f) != 1) {
+			perror("flattened header");
+			return TEST_ERR;
+		}
+		remain = MDF_HEADER_SIZE - sizeof hdr;
+		while (remain--) {
+			if (putc(0, f) != 0) {
+				perror("flattened header padding");
+				return TEST_ERR;
+			}
+		}
+	}
+
 	rc = writedata(f);
 	if (rc != 0)
 		return rc;
 
-	rc = writeheader(f);
-	if (rc != 0)
-		return rc;
+	if (flattened) {
+		struct makedumpfile_data_header hdr = {
+			.offset = htobe64(MDF_OFFSET_END_FLAG),
+			.buf_size = htobe64(MDF_OFFSET_END_FLAG),
+		};
+		if (fwrite(&hdr, sizeof hdr, 1, f) != 1) {
+			perror("end segment header");
+			return TEST_ERR;
+		}
+	}
 
 	return 0;
 }
