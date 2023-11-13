@@ -356,6 +356,66 @@ finish_open_dump(kdump_ctx_t *ctx)
 	return KDUMP_OK;
 }
 
+/** Clear file.set.x.fd attributes
+ * @param ctx   Dump file object.
+ *
+ * Clear all file descriptors. This is done before installing a new file
+ * descriptor set to make sure that previously set file descriptor are not
+ * used unexpectedly.
+ */
+static void
+clear_all_fds(kdump_ctx_t *ctx)
+{
+	struct attr_data *dir = gattr(ctx, GKI_dir_file_set);
+
+	for (dir = dir->dir; dir; dir = dir->next) {
+		struct attr_data *child;
+		if (dir->template->type == KDUMP_DIRECTORY &&
+		    (child = lookup_dir_attr(ctx->dict, dir, "fd", 2)))
+			clear_attr(ctx, child);
+	}
+}
+
+kdump_status
+kdump_set_filenames(kdump_ctx_t *ctx, unsigned n, const char *const *names)
+{
+	struct attr_data *dir;
+	kdump_status status;
+
+	clear_error(ctx);
+
+	if (get_num_files(ctx) < n &&
+	    (status = set_attr_number(ctx, gattr(ctx, GKI_num_files),
+				      ATTR_PERSIST, n)) != KDUMP_OK)
+		return set_error(ctx, status,
+				 "Cannot initialize file set size");
+
+	for (dir = gattr(ctx, GKI_dir_file_set)->dir; dir; dir = dir->next) {
+		struct attr_data *child;
+		unsigned fidx;
+
+		if (dir->template->type != KDUMP_DIRECTORY)
+			continue;
+		fidx = dir->template->fidx;
+		if (fidx >= n)
+			continue;
+		child = lookup_dir_attr(ctx->dict, dir, "name", 4);
+		if (!child)
+			continue;
+
+		if (names[fidx]) {
+			status = set_attr_string(ctx, child, ATTR_PERSIST,
+						 names[fidx]);
+			if (status != KDUMP_OK)
+				return set_error(ctx, status, "%s",
+						 err_filename(ctx, fidx));
+		} else
+			clear_attr(ctx, child);
+	}
+
+	return KDUMP_OK;
+}
+
 DEFINE_ALIAS(open_fdset);
 
 kdump_status
@@ -367,11 +427,10 @@ kdump_open_fdset(kdump_ctx_t *ctx, unsigned nfds, const int *fds)
 	clear_error(ctx);
 
 	/* Make sure we do not use a stale file descriptor value. */
+	clear_all_fds(ctx);
+
 	status = set_attr_number(ctx, gattr(ctx, GKI_num_files),
-				 ATTR_PERSIST, 0);
-	if (status == KDUMP_OK)
-		status = set_attr_number(ctx, gattr(ctx, GKI_num_files),
-					 ATTR_PERSIST, nfds);
+				 ATTR_PERSIST, nfds);
 	if (status != KDUMP_OK)
 		return set_error(ctx, status,
 				 "Cannot initialize file set size");

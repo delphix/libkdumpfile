@@ -317,6 +317,31 @@ uint_fast32_t kdump_d32toh(kdump_ctx_t *ctx, uint_fast32_t val);
  */
 uint_fast64_t kdump_d64toh(kdump_ctx_t *ctx, uint_fast64_t val);
 
+/** Set descriptive file names.
+ * @param ctx    Dump file object.
+ * @param n      Number of names in @p names.
+ * @param names  Names. @c NULL means clear the name.
+ * @returns      Error status.
+ *
+ * Set the optional file names. These names are used in error messages to give
+ * humans a clue which file of a multi-file dump the error is related.
+ */
+kdump_status kdump_set_filenames(kdump_ctx_t *ctx, unsigned n,
+				 const char *const *names);
+
+/** Set a file name.
+ * @param ctx   Dump file object.
+ * @param name  File name.
+ * @returns     Error status.
+ *
+ * This is a shortcut for naming a single-file dump.
+ */
+static inline kdump_status
+kdump_set_filename(kdump_ctx_t *ctx, const char *name)
+{
+	return kdump_set_filenames(ctx, 1, &name);
+}
+
 /** Open a set of dump files.
  * @param ctx   Dump file object.
  * @param nfds  Number of file descriptors in @p fds.
@@ -324,6 +349,12 @@ uint_fast64_t kdump_d64toh(kdump_ctx_t *ctx, uint_fast64_t val);
  * @returns     Error status.
  *
  * Set up file.fdset attribute subtree to open a set of dump files.
+ *
+ * Note: Only file descriptors are replaced by this call; if file name
+ * attributes were set before the call, they are not changed. However, this
+ * function sets file.set.number to @p nfds, which discards file.set.x
+ * sub-directories for x greater than or equal to @p nfds, INCLUDING any
+ * respective file.set.x.name attributes.
  */
 kdump_status kdump_open_fdset(kdump_ctx_t *ctx, unsigned nfds, const int *fds);
 
