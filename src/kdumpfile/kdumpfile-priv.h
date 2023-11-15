@@ -135,6 +135,8 @@ enum kdump_arch {
 	ARCH_MIPS,
 	ARCH_PPC,
 	ARCH_PPC64,
+	ARCH_RISCV32,
+	ARCH_RISCV64,
 	ARCH_S390,
 	ARCH_S390X,
 	ARCH_X86_64,
@@ -745,6 +747,7 @@ INTERNAL_DECL(kdump_status, linux_iomem_kcode,
 INTERNAL_DECL(extern const struct arch_ops, aarch64_ops, );
 INTERNAL_DECL(extern const struct arch_ops, arm_ops, );
 INTERNAL_DECL(extern const struct arch_ops, ia32_ops, );
+INTERNAL_DECL(extern const struct arch_ops, riscv64_ops, );
 INTERNAL_DECL(extern const struct arch_ops, s390x_ops, );
 INTERNAL_DECL(extern const struct arch_ops, x86_64_ops, );
 INTERNAL_DECL(extern const struct arch_ops, ppc64_ops, );

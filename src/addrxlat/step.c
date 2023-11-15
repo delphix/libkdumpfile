@@ -51,6 +51,8 @@ static const char pte_format_names[][24] = {
 	[ADDRXLAT_PTE_IA32] = "ia32",
 	[ADDRXLAT_PTE_IA32_PAE] = "ia32_pae",
 	[ADDRXLAT_PTE_PPC64_LINUX_RPN30] = "ppc64_linux_rpn30",
+	[ADDRXLAT_PTE_RISCV32] = "riscv32",
+	[ADDRXLAT_PTE_RISCV64] = "riscv64",
 	[ADDRXLAT_PTE_S390X] = "s390x",
 	[ADDRXLAT_PTE_X86_64] = "x86_64",
 };
@@ -331,6 +333,7 @@ first_step_pgt(addrxlat_step_t *step, addrxlat_addr_t addr)
 	case ADDRXLAT_PTE_S390X:
 		return first_step_uaddr(step, addr);
 
+	case ADDRXLAT_PTE_RISCV64:
 	case ADDRXLAT_PTE_X86_64:
 		return first_step_saddr(step, addr);
 
@@ -375,6 +378,9 @@ next_step_pgt(addrxlat_step_t *step)
 
 	case ADDRXLAT_PTE_IA32_PAE:
 		return pgt_ia32_pae(step);
+
+	case ADDRXLAT_PTE_RISCV64:
+		return pgt_riscv64(step);
 
 	case ADDRXLAT_PTE_X86_64:
 		return pgt_x86_64(step);

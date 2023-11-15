@@ -165,6 +165,9 @@ test_scripts = \
 	addrxlat-ia32 \
 	addrxlat-ia32-pae \
 	addrxlat-ppc64-64k \
+	addrxlat-riscv-sv39 \
+	addrxlat-riscv-sv48 \
+	addrxlat-riscv-sv57 \
 	addrxlat-s390x-2l \
 	addrxlat-s390x-3l \
 	addrxlat-s390x-4l \
@@ -218,6 +221,7 @@ test_scripts = \
 	elf-prstatus-arm \
 	elf-prstatus-i386 \
 	elf-prstatus-ppc64 \
+	elf-prstatus-riscv64 \
 	elf-prstatus-s390x \
 	elf-prstatus-x86_64 \
 	elf-basic \
@@ -276,6 +280,9 @@ test_scripts = \
 	xlat-linux-ia32 \
 	xlat-linux-ia32-pae \
 	xlat-linux-ppc64-64k \
+	xlat-linux-riscv-6.5-sv39 \
+	xlat-linux-riscv-6.5-sv48 \
+	xlat-linux-riscv-6.5-sv57 \
 	xlat-linux-s390x-2l \
 	xlat-linux-s390x-3l \
 	xlat-linux-s390x-4l \
@@ -340,6 +347,7 @@ dist_check_DATA = \
 	elf-prstatus-arm.data \
 	elf-prstatus-i386.data \
 	elf-prstatus-ppc64.data \
+	elf-prstatus-riscv64.data \
 	elf-prstatus-s390x.data \
 	elf-prstatus-x86_64.data \
         elf-endian.data \
@@ -410,6 +418,15 @@ dist_check_DATA = \
 	xlat-linux-ppc64-64k.data \
 	xlat-linux-ppc64-64k.expect \
 	xlat-linux-ppc64-64k.sym \
+	xlat-linux-riscv-6.5-sv39.data \
+	xlat-linux-riscv-6.5-sv39.expect \
+	xlat-linux-riscv-6.5-sv39.sym \
+	xlat-linux-riscv-6.5-sv48.data \
+	xlat-linux-riscv-6.5-sv48.expect \
+	xlat-linux-riscv-6.5-sv48.sym \
+	xlat-linux-riscv-6.5-sv57.data \
+	xlat-linux-riscv-6.5-sv57.expect \
+	xlat-linux-riscv-6.5-sv57.sym \
 	xlat-linux-s390x-2l.data \
 	xlat-linux-s390x-2l.expect \
 	xlat-linux-s390x-2l.sym \
