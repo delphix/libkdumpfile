@@ -37,6 +37,9 @@
 #include <unistd.h>
 #include <elf.h>
 
+#include <sys/statfs.h>
+#include <linux/magic.h>
+
 /* This definition is missing from older version of <elf.h> */
 #ifndef EM_AARCH64
 # define EM_AARCH64      183
@@ -459,9 +462,10 @@ elf_get_bits(struct kdump_shared *shared,
 			set_bits(bits, cur - first, last - first);
 			return;
 		}
-		set_bits(bits, cur - first, next - first);
-
-		cur = next + 1;
+		if (cur <= next) {
+			set_bits(bits, cur - first, next - first);
+			cur = next + 1;
+		}
 		++pls;
 	} while (pls < &edp->load_sorted[edp->num_load_sorted]);
 
@@ -557,8 +561,9 @@ elf_find_clear(kdump_errmsg_t *err, struct kdump_shared *shared,
 	while (pls < &edp->load_sorted[edp->num_load_sorted] &&
 	       *idx >= addr_to_pfn(shared, pls->phys)) {
 		kdump_paddr_t size = ismem ? pls->memsz : pls->filesz;
-		*idx = addr_to_pfn(shared, pls->phys + size - 1);
-		++(*idx);
+		kdump_paddr_t pfn = addr_to_pfn(shared, pls->phys + size - 1);
+		if (pfn >= *idx)
+			*idx = pfn + 1;
 		++pls;
 	}
 }
@@ -1564,6 +1569,19 @@ open_common(kdump_ctx_t *ctx)
 	}
 
 	set_addrspace_caps(ctx->xlat, as_caps);
+
+	if (!attr_isset(gattr(ctx, GKI_linux_vmcoreinfo_raw)) &&
+	    attr_isset(gattr(ctx, GKI_linux_task_struct))) {
+		struct statfs stfs;
+
+		if (fstatfs(ctx->shared->fcache->info[0].fd, &stfs) < 0)
+			return set_error(ctx, KDUMP_ERR_SYSTEM,
+					 "Cannot determine filesystem");
+		if (stfs.f_type == PROC_SUPER_MAGIC) {
+			read_current_vmcoreinfo(ctx);
+			clear_error(ctx);
+		}
+	}
 
 	return KDUMP_OK;
 }
