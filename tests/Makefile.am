@@ -201,6 +201,7 @@ test_scripts = \
 	diskdump-excluded \
 	diskdump-split \
 	diskdump-split-flat \
+	diskdump-split-mixed \
 	diskdump-v6-arm \
 	diskdump-v6-ia32 \
 	early-version-code \
@@ -222,6 +223,7 @@ test_scripts = \
 	elf-prstatus-x86_64 \
 	elf-task_struct \
 	elf-basic \
+	elf-basic-flat \
         elf-be \
         elf-le \
 	elf-nonexistent \
