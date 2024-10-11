@@ -196,7 +196,9 @@ test_scripts = \
 	diskdump-empty-s390x \
 	diskdump-empty-x86_64 \
 	diskdump-basic-raw \
+	diskdump-basic-vmcoreinfo \
 	diskdump-flat-raw \
+	diskdump-flat-vmcoreinfo \
 	diskdump-multiread \
 	diskdump-excluded \
 	diskdump-split \
@@ -295,6 +297,7 @@ test_scripts = \
 	xlat-linux-x86_64-ktext-40M \
 	xlat-linux-x86_64-ktext-512M \
 	xlat-linux-x86_64-ktext-520M \
+	xlat-linux-x86_64-ktext-54M-kaslr \
 	xlat-linux-x86_64-old \
 	xlat-linux-x86_64-old-nover \
 	xlat-linux-x86_64-2.6.11 \
@@ -392,6 +395,7 @@ dist_check_DATA = \
 	diskdump-split.expect.3 \
 	sys-xlat-x86_64-linux.expect \
 	sys-xlat-x86_64-linux-xen.expect \
+	vmcoreinfo.data \
 	xlatmap.expect \
 	xlat-os-aarch64-none.expect \
 	xlat-os-ia32-none.expect \
@@ -476,6 +480,9 @@ dist_check_DATA = \
 	xlat-linux-x86_64-ktext-520M.data \
 	xlat-linux-x86_64-ktext-520M.expect \
 	xlat-linux-x86_64-ktext-520M.sym \
+	xlat-linux-x86_64-ktext-54M-kaslr.data \
+	xlat-linux-x86_64-ktext-54M-kaslr.expect \
+	xlat-linux-x86_64-ktext-54M-kaslr.sym \
 	xlat-linux-x86_64-old.expect \
 	xlat-linux-x86_64-old-nover.data \
 	xlat-linux-x86_64-old-nover.expect \
