@@ -223,6 +223,9 @@ struct arch_ops {
 	/** Process an NT_PRSTATUS note. */
 	kdump_status (*process_prstatus)(kdump_ctx_t *, const void *, size_t);
 
+	/** Process a QEMU CPU state note. */
+	kdump_status (*process_qemu_cpustate)(kdump_ctx_t *, const void *, size_t);
+
 	/** Process a Xen .xen_prstatus section. */
 	kdump_status (*process_xen_prstatus)(kdump_ctx_t *, const void *, size_t);
 
@@ -859,6 +862,12 @@ struct derived_attr_def {
 INTERNAL_DECL(kdump_status, init_cpu_prstatus,
 	      (kdump_ctx_t *ctx, unsigned cpu, const void *data, size_t size));
 INTERNAL_DECL(kdump_status, create_cpu_regs,
+	      (kdump_ctx_t *ctx, unsigned cpu,
+	       struct derived_attr_def *def, unsigned ndef));
+
+INTERNAL_DECL(kdump_status, init_qemu_cpustate,
+	      (kdump_ctx_t *ctx, unsigned cpu, const void *data, size_t size));
+INTERNAL_DECL(kdump_status, create_qemu_cpu_regs,
 	      (kdump_ctx_t *ctx, unsigned cpu,
 	       struct derived_attr_def *def, unsigned ndef));
 
