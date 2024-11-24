@@ -297,27 +297,15 @@ static struct derived_attr_def x86_64_reg_attrs[] = {
 };
 
 static kdump_status
-process_x86_64_prstatus(kdump_ctx_t *ctx, const void *data, size_t size)
+process_x86_64_prstatus(kdump_ctx_t *ctx, unsigned int cpu,
+			const void *data, size_t size)
 {
-	unsigned cpu;
-	kdump_status status;
-
-	cpu = get_num_cpus(ctx);
-	set_num_cpus(ctx, get_num_cpus(ctx) + 1);
-
-	status = init_cpu_prstatus(ctx, cpu, data, size);
-	if (status != KDUMP_OK)
-		return set_error(ctx, status, "Cannot set CPU %u %s",
-				 cpu, "PRSTATUS");
-
 	if (size < sizeof(struct elf_prstatus))
 		return set_error(ctx, KDUMP_ERR_CORRUPT,
 				 "Wrong PRSTATUS size: %zu", size);
 
-	status = create_cpu_regs(
+	return create_cpu_regs(
 		ctx, cpu, x86_64_reg_attrs, ARRAY_SIZE(x86_64_reg_attrs));
-
-	return status;
 }
 
 #define QEMU_REG_FIELD(name, field) \
@@ -371,22 +359,23 @@ static struct derived_attr_def x86_64_qemu_reg_attrs[] = {
 };
 
 static kdump_status
-process_x86_64_qemu_cpustate(kdump_ctx_t *ctx, const void *data, size_t size)
+process_x86_64_qemu_cpustate(kdump_ctx_t *ctx, unsigned int cpu,
+			     const void *data, size_t size)
 {
-	unsigned cpu;
-	kdump_status status;
-
-	cpu = isset_num_qemu_cpus(ctx) ? get_num_qemu_cpus(ctx) : 0;
-	set_num_qemu_cpus(ctx, cpu + 1);
-
-	status = init_qemu_cpustate(ctx, cpu, data, size);
-	if (status != KDUMP_OK)
-		return set_error(ctx, status, "Cannot set CPU %u %s",
-				 cpu, "QEMU_CPUSTATE");
+	const struct qemu_cpu_state *state = data;
 
 	if (size < offsetof(struct qemu_cpu_state, kernel_gs_base))
 		return set_error(ctx, KDUMP_ERR_CORRUPT,
 				 "Wrong QEMUCPUState size: %zu", size);
+
+	/* Ignore unsupported versions */
+	if (dump32toh(ctx, state->version) != QEMUCPUSTATE_VERSION)
+		return KDUMP_OK;
+
+	if (dump32toh(ctx, state->size) > size)
+		return set_error(ctx, KDUMP_ERR_CORRUPT,
+				 "QEMUCPUState size %" PRIu32 " > note size %zu",
+				 dump32toh(ctx, state->size), size);
 
 	return create_qemu_cpu_regs(
 		ctx, cpu, x86_64_qemu_reg_attrs,
