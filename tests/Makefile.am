@@ -224,6 +224,7 @@ test_scripts = \
 	elf-prstatus-s390x \
 	elf-prstatus-x86_64 \
 	elf-qemu-cpustate-x86_64 \
+	elf-qemu-cpustate-wrongver \
 	elf-task_struct \
 	elf-basic \
 	elf-basic-flat \
@@ -317,6 +318,9 @@ test_scripts = \
 	xlat-linux-x86_64-4.13-nover \
 	xlat-linux-x86_64-4.13-kaslr \
 	xlat-linux-x86_64-5l \
+	xlat-linux-x86_64-6.11-pti-ldt \
+	xlat-linux-x86_64-6.11-pti-user \
+	xlat-linux-x86_64-6.11-pti-user-ver \
 	xlat-xen-ia32 \
 	xlat-xen-ia32-pae \
 	xlat-xen-x86_64-old \
@@ -368,6 +372,7 @@ dist_check_DATA = \
 	elf-prstatus-s390x.data \
 	elf-prstatus-x86_64.data \
 	elf-qemu-cpustate-x86_64.data \
+	elf-qemu-cpustate-wrongver.data \
 	elf-task_struct.data \
         elf-endian.data \
         elf-be16.expect \
@@ -531,6 +536,12 @@ dist_check_DATA = \
 	xlat-linux-x86_64-5l.data \
 	xlat-linux-x86_64-5l.expect \
 	xlat-linux-x86_64-5l.sym \
+	xlat-linux-x86_64-6.11-pti-ldt.data \
+	xlat-linux-x86_64-6.11-pti-ldt.expect \
+	xlat-linux-x86_64-6.11-pti-ldt.sym \
+	xlat-linux-x86_64-6.11-pti-user.data \
+	xlat-linux-x86_64-6.11-pti-user.expect \
+	xlat-linux-x86_64-6.11-pti-user.sym \
 	xlat-xen-ia32.data \
 	xlat-xen-ia32.expect \
 	xlat-xen-ia32-pae.data \
@@ -584,6 +595,9 @@ TESTS = $(test_scripts) \
 	vmci-lines-post \
 	vmci-post \
 	xlatop
+
+EXTRA_DIST = \
+	dump-pgt.py
 
 clean-local:
 	-rm -rf out

@@ -133,6 +133,9 @@
 /** End of direct physical mapping with 5-level paging in 4.2+ */
 #define LINUX_DIRECTMAP_END_5L_4_2	0xff90ffffffffffff
 
+/** Linux Page Table Isolation bit in CR3. */
+#define LINUX_PTI_USER_PGTABLE_MASK	((addrxlat_addr_t)1 << PAGE_SHIFT)
+
 /** AMD64 (Intel 64) page table step function.
  * @param step  Current step state.
  * @returns     Error status.
@@ -249,7 +252,7 @@ static addrxlat_status
 linux_directmap_by_ver(struct sys_region *rgn, unsigned ver)
 {
 	if (ver >= ADDRXLAT_VER_LINUX(4, 8, 0))
-		return ADDRXLAT_ERR_NOMETH;
+		return ADDRXLAT_ERR_NOTIMPL;
 
 #define LINUX_DIRECTMAP_BY_VER(a, b, c)			\
 	if (ver >= ADDRXLAT_VER_LINUX(a, b, c)) {		\
@@ -281,6 +284,41 @@ is_directmap(addrxlat_sys_t *sys, addrxlat_ctx_t *ctx,
 	return status == ADDRXLAT_OK && addr == 0;
 }
 
+/** Search for Linux directmap in the page tables.
+ * @param rgn   Directmap region; updated on success.
+ * @param step  Initial state for page table translation.
+ * @returns    Error status.
+ */
+static addrxlat_status
+linux_search_directmap(struct sys_region *rgn, addrxlat_step_t *step)
+{
+	addrxlat_addr_t end;
+	addrxlat_status status;
+
+	if (step->meth->param.pgt.pf.nfields == 6) {
+		rgn->first = LINUX_DIRECTMAP_START_5L;
+		end = LINUX_DIRECTMAP_END_5L_4_2;
+	} else {
+		rgn->first = LINUX_DIRECTMAP_START_2_6_31;
+		end = LINUX_DIRECTMAP_END_4_2;
+	}
+	while (rgn->first < end) {
+		status = lowest_mapped(step, &rgn->first, end);
+		if (status != ADDRXLAT_OK)
+			break;
+		if (is_directmap(step->sys, step->ctx, rgn->first)) {
+			rgn->last = rgn->first;
+			return highest_linear(step, &rgn->last, end,
+					      -rgn->first);
+		}
+		status = lowest_unmapped(step, &rgn->first, end);
+		if (status != ADDRXLAT_OK)
+			break;
+	}
+
+	return ADDRXLAT_ERR_NOTIMPL;
+}
+
 /** Get directmap location by walking page tables.
  * @param rgn  Directmap region; updated on success.
  * @param sys  Translation system object.
@@ -295,8 +333,6 @@ linux_directmap_by_pgt(struct sys_region *rgn,
 		       addrxlat_sys_t *sys, addrxlat_ctx_t *ctx)
 {
 	addrxlat_step_t step;
-	addrxlat_addr_t end;
-	addrxlat_status status;
 
 	step.ctx = ctx;
 	step.sys = sys;
@@ -314,20 +350,7 @@ linux_directmap_by_pgt(struct sys_region *rgn,
 				      LINUX_DIRECTMAP_END_2_6_11, -rgn->first);
 	}
 
-	if (step.meth->param.pgt.pf.nfields == 6) {
-		rgn->first = LINUX_DIRECTMAP_START_5L;
-		end = LINUX_DIRECTMAP_END_5L_4_2;
-	} else {
-		rgn->first = LINUX_DIRECTMAP_START_2_6_31;
-		end = LINUX_DIRECTMAP_END_4_2;
-	}
-	status = lowest_mapped(&step, &rgn->first, end);
-	if (status == ADDRXLAT_OK) {
-		rgn->last = rgn->first;
-		return highest_linear(&step, &rgn->last, end, -rgn->first);
-	}
-
-	return ADDRXLAT_ERR_NOTIMPL;
+	return linux_search_directmap(rgn, &step);
 }
 
 /** Set up Linux direct mapping on x86_64.
@@ -340,6 +363,9 @@ linux_directmap(struct os_init_data *ctl)
 	struct sys_region layout[2];
 	addrxlat_status status;
 
+	if (ctl->sys->meth[ADDRXLAT_SYS_METH_DIRECT].kind != ADDRXLAT_NOMETH)
+		return ADDRXLAT_OK;
+
 	status = linux_directmap_by_pgt(&layout[0], ctl->sys, ctl->ctx);
 	if (status != ADDRXLAT_OK && opt_isset(ctl->popt, version_code))
 		status = linux_directmap_by_ver(&layout[0],
@@ -350,10 +376,8 @@ linux_directmap(struct os_init_data *ctl)
 		layout[0].act = SYS_ACT_DIRECT;
 		layout[1].meth = ADDRXLAT_SYS_METH_NUM;
 		status = sys_set_layout(ctl, ADDRXLAT_SYS_MAP_KV_PHYS, layout);
-		if (status != ADDRXLAT_OK)
-			return status;
 	}
-	return ADDRXLAT_OK;
+	return status;
 }
 
 /** Set the kernel text mapping offset.
@@ -691,46 +715,64 @@ set_xen_p2m(struct os_init_data *ctl)
 }
 
 /** Get the top-level page table address for a Linux kernel.
- * @param ctx   Address translation object.
- * @param addr  Root page table address. Updated on success.
+ * @param ctl   Initialization data.
  * @returns     Error status.
  *
  * It is not an error if the root page table address cannot be
  * determined; it merely stays uninitialized.
  */
 static addrxlat_status
-get_linux_pgt_root(addrxlat_ctx_t *ctx, addrxlat_fulladdr_t *addr)
+get_linux_pgt_root(struct os_init_data *ctl)
 {
 	static const char err_fmt[] = "Cannot resolve \"%s\"";
+	addrxlat_fulladdr_t *addr;
 	addrxlat_status status;
 
+	addr = &ctl->sys->meth[ADDRXLAT_SYS_METH_PGT].param.pgt.root;
 	if (addr->as != ADDRXLAT_NOADDR)
 		return ADDRXLAT_OK;
 
-	status = get_symval(ctx, "init_top_pgt", &addr->addr);
-	if (status == ADDRXLAT_OK) {
-		addr->as = ADDRXLAT_KVADDR;
-		return status;
-	} else if (status != ADDRXLAT_ERR_NODATA)
-		return set_error(ctx, status, err_fmt, "init_top_pgt");
-	clear_error(ctx);
-
-	status = get_symval(ctx, "init_level4_pgt", &addr->addr);
-	if (status == ADDRXLAT_OK) {
-		addr->as = ADDRXLAT_KVADDR;
-		return status;
-	} else if (status != ADDRXLAT_ERR_NODATA)
-		return set_error(ctx, status, err_fmt, "init_level4_pgt");
-	clear_error(ctx);
-
-	status = get_reg(ctx, "cr3", &addr->addr);
+	status = get_reg(ctl->ctx, "cr3", &addr->addr);
 	if (status == ADDRXLAT_OK) {
 		addr->addr &= ~PAGE_MASK;
 		addr->as = ADDRXLAT_MACHPHYSADDR;
+		if (!(addr->addr & LINUX_PTI_USER_PGTABLE_MASK))
+			return status;
+		status = linux_directmap(ctl);
+		if (status == ADDRXLAT_ERR_NOTIMPL) {
+			addr->addr &= ~LINUX_PTI_USER_PGTABLE_MASK;
+			status = linux_directmap(ctl);
+			if (status == ADDRXLAT_OK)
+				return status;
+			addr->addr |= LINUX_PTI_USER_PGTABLE_MASK;
+		}
+	} else if (status != ADDRXLAT_ERR_NODATA)
+		return set_error(ctl->ctx, status, err_fmt, "cr3");
+	clear_error(ctl->ctx);
+
+	status = get_symval(ctl->ctx, "swapper_pg_dir", &addr->addr);
+	if (status == ADDRXLAT_OK) {
+		addr->as = ADDRXLAT_KVADDR;
 		return status;
 	} else if (status != ADDRXLAT_ERR_NODATA)
-		return set_error(ctx, status, err_fmt, "cr3");
-	clear_error(ctx);
+		return set_error(ctl->ctx, status, err_fmt, "swapper_pg_dir");
+	clear_error(ctl->ctx);
+
+	status = get_symval(ctl->ctx, "init_top_pgt", &addr->addr);
+	if (status == ADDRXLAT_OK) {
+		addr->as = ADDRXLAT_KVADDR;
+		return status;
+	} else if (status != ADDRXLAT_ERR_NODATA)
+		return set_error(ctl->ctx, status, err_fmt, "init_top_pgt");
+	clear_error(ctl->ctx);
+
+	status = get_symval(ctl->ctx, "init_level4_pgt", &addr->addr);
+	if (status == ADDRXLAT_OK) {
+		addr->as = ADDRXLAT_KVADDR;
+		return status;
+	} else if (status != ADDRXLAT_ERR_NODATA)
+		return set_error(ctl->ctx, status, err_fmt, "init_level4_pgt");
+	clear_error(ctl->ctx);
 
 	return ADDRXLAT_OK;
 }
@@ -742,21 +784,20 @@ get_linux_pgt_root(addrxlat_ctx_t *ctx, addrxlat_fulladdr_t *addr)
 static addrxlat_status
 map_linux_x86_64(struct os_init_data *ctl)
 {
-	addrxlat_meth_t *meth;
 	addrxlat_addr_t sme_mask;
 	unsigned long read_caps;
 	addrxlat_status status;
 
 	/* Set up page table translation. */
-	meth = &ctl->sys->meth[ADDRXLAT_SYS_METH_PGT];
-	status = get_linux_pgt_root(ctl->ctx, &meth->param.pgt.root);
+	status = get_linux_pgt_root(ctl);
 	if (status != ADDRXLAT_OK)
 		return set_error(ctl->ctx, status,
 				 "Cannot determine root page table");
 
 	status = get_number(ctl->ctx, "sme_mask", &sme_mask);
 	if (status == ADDRXLAT_OK)
-		meth->param.pgt.pte_mask = sme_mask;
+		ctl->sys->meth[ADDRXLAT_SYS_METH_PGT].param.pgt.pte_mask =
+			sme_mask;
 	else if (status == ADDRXLAT_ERR_NODATA)
 		clear_error(ctl->ctx);
 	else
@@ -796,7 +837,7 @@ map_linux_x86_64(struct os_init_data *ctl)
 
 	/* Set up direct mapping. */
 	status = linux_directmap(ctl);
-	if (status != ADDRXLAT_OK)
+	if (status != ADDRXLAT_OK && status != ADDRXLAT_ERR_NOTIMPL)
 		return status;
 
 	return ADDRXLAT_OK;

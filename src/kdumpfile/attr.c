@@ -341,20 +341,19 @@ alloc_attr(struct attr_dict *dict, struct attr_data *parent,
 	return d;
 }
 
-/**  Discard an attribute's value.
- * @param attr  The attribute whose value is being discarded.
+/**  Discard a value.
+ * @param val    Attribute value.
+ * @param type   Attribute type.
+ * @param flags  Attribute flags.
  *
- * Call this function if the attribute data is no longer needed.
  * If the value is dynamically allocated, free the associated memory.
  * If the value is refcounted, drop the reference.
  */
 static void
-discard_value(struct attr_data *attr)
+discard_value(const kdump_attr_value_t *val, kdump_attr_type_t type,
+	      struct attr_flags flags)
 {
-	if (!attr_isset(attr))
-		return;
-
-	switch (attr->template->type) {
+	switch (type) {
 	case KDUMP_NIL:
 	case KDUMP_DIRECTORY:
 	case KDUMP_NUMBER:
@@ -363,42 +362,34 @@ discard_value(struct attr_data *attr)
 		break;
 
 	case KDUMP_STRING:
-		if (attr->flags.dynstr) {
-			attr->flags.dynstr = 0;
-			free((void*) attr_value(attr)->string);
-		}
+		if (flags.dynstr)
+			free((void *)val->string);
 		break;
 
 	case KDUMP_BITMAP:
-		internal_bmp_decref(attr_value(attr)->bitmap);
+		internal_bmp_decref(val->bitmap);
 		break;
 
 	case KDUMP_BLOB:
-		internal_blob_decref(attr_value(attr)->blob);
+		internal_blob_decref(val->blob);
 		break;
 	}
 }
 
-/**  Discard the new value of an attribute.
- * @param attr    Base attribute.
- * @prarm flags   New value flags.
- * @param newval  New value (which should be discarded).
+/**  Discard an attribute's value.
+ * @param attr  The attribute whose value is being discarded.
  *
- * This helper is called when a new value cannot be set (the pre_set hook
- * returns an error status). At that point the attribute should preserve its
- * old value, but the new value should be discarded.
+ * Call this function if the attribute data is no longer needed.
  */
 static void
-discard_new_value(const struct attr_data *attr,
-		  struct attr_flags flags, kdump_attr_value_t *newval)
+discard_attr_value(struct attr_data *attr)
 {
-	struct attr_data tmp;
-	tmp.template = attr->template;
-	tmp.flags = flags;
-	tmp.flags.isset = 1;
-	tmp.flags.indirect = 0;
-	tmp.val = *newval;
-	discard_value(&tmp);
+	if (!attr_isset(attr))
+		return;
+
+	discard_value(attr_value(attr), attr->template->type,
+		      attr->flags);
+	attr->flags.dynstr = false;
 }
 
 /**  Clear (unset) a single attribute.
@@ -415,8 +406,8 @@ clear_single_attr(kdump_ctx_t *ctx, struct attr_data *attr)
 	if (ops && ops->pre_clear)
 		ops->pre_clear(ctx, attr);
 
-	discard_value(attr);
-	attr->flags.isset = 0;
+	discard_attr_value(attr);
+	attr->flags.isset = false;
 }
 
 /**  Clear (unset) any attribute and its children recursively.
@@ -438,18 +429,18 @@ clear_attr(kdump_ctx_t *ctx, struct attr_data *attr)
 /**  Clear (unset) a volatile attribute and its children recursively.
  * @param ctx   Dump file object.
  * @param attr  Attribute to be cleared.
- * @returns     Non-zero if the entry could not be cleared.
+ * @returns     @c true if the entry could not be cleared.
  *
  * This function clears only volatile attributes, i.e. those that were
  * set automatically and should not be preserved when re-opening a dump.
  * Persistent attributes (e.g. those that have been set explicitly) are
  * kept. The complete path to each persistent attributes is also kept.
  */
-static unsigned
+static bool
 clear_volatile(kdump_ctx_t *ctx, struct attr_data *attr)
 {
 	struct attr_data *child;
-	unsigned persist;
+	bool persist;
 
 	persist = attr->flags.persist;
 	if (attr->template->type == KDUMP_DIRECTORY)
@@ -485,7 +476,7 @@ dealloc_attr(struct attr_data *attr)
 		}
 	}
 
-	discard_value(attr);
+	discard_attr_value(attr);
 	if (attr->tflags.dyntmpl)
 		free((void*) attr->template);
 
@@ -513,7 +504,7 @@ new_attr(struct attr_dict *dict, struct attr_data *parent,
 		attr = lookup_dir_attr_no_fallback(
 			dict, parent, tmpl->key, strlen(tmpl->key));
 		if (attr) {
-			discard_value(attr);
+			discard_attr_value(attr);
 			if (attr->tflags.dyntmpl)
 				free((void*) attr->template);
 			attr->template = tmpl;
@@ -624,7 +615,7 @@ create_attr_path(struct attr_dict *dict, struct attr_data *dir,
 static bool
 copy_data(struct attr_data *dest, const struct attr_data *src)
 {
-	dest->flags.isset = 1;
+	dest->flags.isset = true;
 	dest->flags.persist = src->flags.persist;
 
 	switch (src->template->type) {
@@ -778,7 +769,7 @@ static void
 instantiate_path(struct attr_data *attr)
 {
 	while (!attr_isset(attr)) {
-		attr->flags.isset = 1;
+		attr->flags.isset = true;
 		if (!attr->parent)
 			break;
 		attr = attr->parent;
@@ -831,7 +822,7 @@ attr_dict_new(struct kdump_shared *shared)
 		dict->global_attrs[i] = attr;
 
 		if (i >= GKI_static_first && i <= GKI_static_last) {
-			attr->flags.indirect = 1;
+			attr->flags.indirect = true;
 			attr->pval = static_attr_value(shared, i);
 		}
 	}
@@ -953,7 +944,8 @@ set_attr(kdump_ctx_t *ctx, struct attr_data *attr,
 		const struct attr_ops *ops = attr->template->ops;
 		if (ops && ops->pre_set &&
 		    (res = ops->pre_set(ctx, attr, pval)) != KDUMP_OK) {
-			discard_new_value(attr, flags, pval);
+			flags.indirect = false;
+			discard_value(pval, attr->template->type, flags);
 			return res;
 		}
 	}
@@ -961,17 +953,17 @@ set_attr(kdump_ctx_t *ctx, struct attr_data *attr,
 	instantiate_path(attr->parent);
 
 	if (attr->template->type != KDUMP_DIRECTORY) {
-		discard_value(attr);
+		discard_attr_value(attr);
 
 		if (flags.indirect)
 			attr->pval = pval;
 		else if (attr->flags.indirect) {
-			flags.indirect = 1;
+			flags.indirect = true;
 			*attr->pval = *pval;
 		} else
 			attr->val = *pval;
 	}
-	flags.isset = 1;
+	flags.isset = true;
 	attr->flags = flags;
 
 	if (!skiphooks) {
@@ -1037,7 +1029,7 @@ set_attr_string(kdump_ctx_t *ctx, struct attr_data *attr,
 				 "Cannot allocate string");
 
 	val.string = dynstr;
-	flags.dynstr = 1;
+	flags.dynstr = true;
 	return set_attr(ctx, attr, flags, &val);
 }
 
@@ -1067,7 +1059,7 @@ set_attr_sized_string(kdump_ctx_t *ctx, struct attr_data *attr,
 	dynstr[dynlen-1] = '\0';
 
 	val.string = dynstr;
-	flags.dynstr = 1;
+	flags.dynstr = true;
 	return set_attr(ctx, attr, flags, &val);
 }
 
@@ -1198,8 +1190,10 @@ check_set_attr(kdump_ctx_t *ctx, struct attr_data *attr,
 		return KDUMP_OK;
 	}
 
-	if (valp->type != attr->template->type)
+	if (valp->type != attr->template->type) {
+		discard_value(&valp->val, valp->type, ATTR_DEFAULT);
 		return set_error(ctx, KDUMP_ERR_INVALID, "Type mismatch");
+	}
 
 	if (valp->type == KDUMP_STRING)
 		return set_attr_string(ctx, attr, ATTR_PERSIST,
@@ -1221,6 +1215,7 @@ kdump_set_attr(kdump_ctx_t *ctx, const char *key,
 
 	d = lookup_attr(ctx->dict, key);
 	if (!d) {
+		discard_value(&valp->val, valp->type, ATTR_DEFAULT);
 		ret = set_error(ctx, KDUMP_ERR_NODATA, "No such key");
 		goto out;
 	}
