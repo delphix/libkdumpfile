@@ -126,9 +126,7 @@ main(int argc, char **argv)
 				fprintf(stderr, "Cannot get value of %s: %s\n",
 					it.key, kdump_get_err(ctx));
 				rc = TEST_FAIL;
-			}
-
-			if (attr.type != KDUMP_STRING) {
+			} else if (attr.type != KDUMP_STRING) {
 				fprintf(stderr, "Wrong type: %d\n", attr.type);
 				rc = TEST_FAIL;
 			} else if (strcmp(attrs[i].value, attr.val.string)) {
@@ -139,6 +137,7 @@ main(int argc, char **argv)
 				rc = TEST_FAIL;
 			} else
 				printf("%s = %s\n", it.key, attr.val.string);
+			kdump_attr_discard(ctx, &attr);
 		}
 
 		res = kdump_attr_iter_next(ctx, &it);
@@ -169,5 +168,6 @@ main(int argc, char **argv)
 			rc = TEST_FAIL;
 		}
 
+	kdump_free(ctx);
 	return rc;
 }

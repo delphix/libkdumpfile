@@ -1122,7 +1122,28 @@ attr_remove_override(struct attr_data *attr, struct attr_override *override)
 	} while (tmpl->override);
 }
 
-DEFINE_ALIAS(get_attr);
+/** Get a copy of the attribute value.
+ * @param ctx   Dump file object.
+ * @param attr  Attribute data.
+ * @param valp  Attribute value (updated on return).
+ * @returns     Error status.
+ */
+static kdump_status
+get_attr_data(kdump_ctx_t *ctx, struct attr_data *attr,
+	      kdump_attr_value_t *valp)
+{
+	kdump_status ret;
+
+	if (!attr_isset(attr))
+		return set_error(ctx, KDUMP_ERR_NODATA, "Key has no value");
+
+	ret = attr_revalidate(ctx, attr);
+	if (ret != KDUMP_OK)
+		return set_error(ctx, ret, "Value cannot be revalidated");
+
+	*valp = *attr_value(attr);
+	return KDUMP_OK;
+}
 
 kdump_status
 kdump_get_attr(kdump_ctx_t *ctx, const char *key, kdump_attr_t *valp)
@@ -1138,19 +1159,8 @@ kdump_get_attr(kdump_ctx_t *ctx, const char *key, kdump_attr_t *valp)
 		ret = set_error(ctx, KDUMP_ERR_NOKEY, "No such key");
 		goto out;
 	}
-	if (!attr_isset(d)) {
-		ret = set_error(ctx, KDUMP_ERR_NODATA, "Key has no value");
-		goto out;
-	}
-	ret = attr_revalidate(ctx, d);
-	if (ret != KDUMP_OK) {
-		ret = set_error(ctx, ret, "Value cannot be revalidated");
-		goto out;
-	}
-
 	valp->type = d->template->type;
-	valp->val = *attr_value(d);
-	ret = KDUMP_OK;
+	ret = get_attr_data(ctx, d, &valp->val);
 
  out:
 	rwlock_unlock(&ctx->shared->lock);
@@ -1158,20 +1168,30 @@ kdump_get_attr(kdump_ctx_t *ctx, const char *key, kdump_attr_t *valp)
 }
 
 kdump_status
-kdump_get_typed_attr(kdump_ctx_t *ctx, const char *key, kdump_attr_t *valp)
+kdump_get_typed_attr(kdump_ctx_t *ctx, const char *key, kdump_attr_type_t type,
+		     kdump_attr_value_t *valp)
 {
-	kdump_attr_type_t type = valp->type;
+	struct attr_data *d;
 	kdump_status ret;
 
-	ret = internal_get_attr(ctx, key, valp);
-	if (ret != KDUMP_OK)
-		return ret;
+	clear_error(ctx);
+	rwlock_rdlock(&ctx->shared->lock);
 
-	if (valp->type != type)
-		return set_error(ctx, KDUMP_ERR_INVALID,
+	d = lookup_attr(ctx->dict, key);
+	if (!d) {
+		ret = set_error(ctx, KDUMP_ERR_NOKEY, "No such key");
+		goto out;
+	}
+	if (d->template->type != type) {
+		ret = set_error(ctx, KDUMP_ERR_INVALID,
 				 "Attribute type mismatch");
+		goto out;
+	}
+	ret = get_attr_data(ctx, d, valp);
 
-	return KDUMP_OK;
+ out:
+	rwlock_unlock(&ctx->shared->lock);
+	return ret;
 }
 
 /**  Set an attribute value with type check.
@@ -1301,6 +1321,36 @@ kdump_attr_ref_isset(kdump_attr_ref_t *ref)
 	return attr_isset(ref_attr(ref));
 }
 
+static kdump_status
+hold_attr_data(kdump_ctx_t *ctx, kdump_attr_t *valp)
+{
+	switch (valp->type) {
+	case KDUMP_NIL:
+	case KDUMP_DIRECTORY:
+	case KDUMP_NUMBER:
+	case KDUMP_ADDRESS:
+		/* Value is embedded: Nothing to be done. */
+		break;
+
+	case KDUMP_STRING:
+		valp->val.string = strdup(valp->val.string);
+		if (!valp->val.string)
+			return set_error(ctx, KDUMP_ERR_SYSTEM,
+					 "Cannot allocate string");
+		break;
+
+	case KDUMP_BITMAP:
+		internal_bmp_incref(valp->val.bitmap);
+		break;
+
+	case KDUMP_BLOB:
+		internal_blob_incref(valp->val.blob);
+		break;
+	}
+
+	return KDUMP_OK;
+}
+
 kdump_status
 kdump_attr_ref_get(kdump_ctx_t *ctx, const kdump_attr_ref_t *ref,
 		   kdump_attr_t *valp)
@@ -1310,24 +1360,21 @@ kdump_attr_ref_get(kdump_ctx_t *ctx, const kdump_attr_ref_t *ref,
 
 	clear_error(ctx);
 	rwlock_rdlock(&ctx->shared->lock);
-
-	if (!attr_isset(d)) {
-		ret = set_error(ctx, KDUMP_ERR_NODATA, "Key has no value");
-		goto out;
-	}
-	ret = attr_revalidate(ctx, d);
-	if (ret != KDUMP_OK) {
-		ret = set_error(ctx, ret, "Value cannot be revalidated");
-		goto out;
-	}
-
 	valp->type = d->template->type;
-	valp->val = *attr_value(d);
-	ret = KDUMP_OK;
-
- out:
+	ret = get_attr_data(ctx, d, &valp->val);
+	if (ret == KDUMP_OK)
+		ret = hold_attr_data(ctx, valp);
+	if (ret != KDUMP_OK)
+		valp->type = KDUMP_NIL;
 	rwlock_unlock(&ctx->shared->lock);
 	return ret;
+}
+
+void
+kdump_attr_discard(kdump_ctx_t *ctx, kdump_attr_t *attr)
+{
+	clear_error(ctx);
+	discard_value(&attr->val, attr->type, ATTR_DYNSTR);
 }
 
 kdump_status
