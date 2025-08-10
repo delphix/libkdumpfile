@@ -5,7 +5,7 @@
 # dump file in a format that is accepted as test case data.
 #
 # It requires pykdumpfile, which is maintained here:
-#   https://github.com/ptesarik/pykdumpfile
+#   https://codeberg.org/ptesarik/pykdumpfile
 #
 
 import sys
