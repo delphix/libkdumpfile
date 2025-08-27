@@ -1,7 +1,7 @@
 ## Process this file with automake to create Makefile.in
 ## Configure input file for libkdumpfile.
 ##
-## Copyright (C) 2017 Ales Novak <alnovak@suse.cz>
+## Copyright (C) 2024 Petr Tesarik <ptesarik@suse.com>
 ##
 ## This file is part of libkdumpfile.
 ##
@@ -19,8 +19,8 @@
 ## along with this program.  If not, see <http://www.gnu.org/licenses/>.
 ##
 
-pyaddrxlatdir = $(pythondir)/addrxlat
+SUBDIRS =
 
-pyaddrxlat_PYTHON = \
-	 __init__.py \
-	exceptions.py
+if BUILD_KDUMPID
+SUBDIRS += kdumpid
+endif
