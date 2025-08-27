@@ -20,9 +20,13 @@ dnl  along with this program.  If not, see <http://www.gnu.org/licenses/>.
 dnl Package release versioning
 m4_define([pkg_major_version], [0])
 m4_define([pkg_minor_version], [5])
-m4_define([pkg_micro_version], [4])
+m4_define([pkg_micro_version], [5])
 m4_define([pkg_version],
           [pkg_major_version.pkg_minor_version.pkg_micro_version])
+
+dnl FIXME: kdumpid has a different versioning scheme
+m4_define([kdumpid_major_version], [1])
+m4_define([kdumpid_minor_version], [7])
 
 AC_INIT([libkdumpfile],[pkg_version],[petr@tesarici.cz])
 
@@ -101,8 +105,10 @@ AC_ARG_ENABLE(debug,
 AS_IF([test "x$enable_debug" = xyes],
     [AC_DEFINE(ENABLE_DEBUG, 1, Define to enable extra debugging features)])
 
-dnl check for Python
-kdump_PYTHON([2.7.0])
+dnl check whether to build optional tools
+AC_SUBST(KDUMPID_VER_MAJOR, kdumpid_major_version)
+AC_SUBST(KDUMPID_VER_MINOR, kdumpid_minor_version)
+KDUMP_TOOL_KDUMPID
 
 AC_CONFIG_FILES([
 	Makefile
@@ -112,8 +118,9 @@ AC_CONFIG_FILES([
 	src/Makefile
 	src/addrxlat/Makefile
 	src/kdumpfile/Makefile
-	python/Makefile
 	tests/Makefile
+	tools/Makefile
+	tools/kdumpid/Makefile
 	libaddrxlat.pc
 	libkdumpfile.pc
 	include/libkdumpfile/kdumpfile.h

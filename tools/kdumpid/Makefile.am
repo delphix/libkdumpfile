@@ -1,7 +1,7 @@
 ## Process this file with automake to create Makefile.in
 ## Configure input file for libkdumpfile.
 ##
-## Copyright (C) 2015 Ales Novak <alnovak@suse.cz>
+## Copyright (C) 2024 Petr Tesarik <ptesarik@suse.com>
 ##
 ## This file is part of libkdumpfile.
 ##
@@ -19,9 +19,31 @@
 ## along with this program.  If not, see <http://www.gnu.org/licenses/>.
 ##
 
-pykdumpfiledir = $(pythondir)/kdumpfile
+AM_CPPFLAGS = -I$(top_builddir)/include \
+	-DVER_MAJOR=$(KDUMPID_VER_MAJOR) \
+	-DVER_MINOR=$(KDUMPID_VER_MINOR)
 
-pykdumpfile_PYTHON = \
-	 __init__.py \
-	exceptions.py \
-	views.py
+AM_CFLAGS = \
+	$(ZLIB_CFLAGS)
+
+LIBS = \
+	$(top_builddir)/src/kdumpfile/libkdumpfile.la \
+	$(top_builddir)/src/addrxlat/libaddrxlat.la \
+	$(ZLIB_LIBS) \
+	$(DIS_ASM_LIBS)
+
+kdumpid_SOURCES = \
+	main.c \
+	util.c \
+	search.c \
+	ppc.c \
+	ppc64.c \
+	s390.c \
+	x86.c
+
+noinst_HEADERS = \
+	kdumpid.h
+
+bin_PROGRAMS = kdumpid
+
+dist_man_MANS = kdumpid.1
