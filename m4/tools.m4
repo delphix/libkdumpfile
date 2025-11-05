@@ -54,7 +54,7 @@ AS_IF([test yes = "$kdump_res"], [dnl
   KDUMP_DIS_ASM_CHECK_UNDEF(-lbfd, bfd_)
   KDUMP_DIS_ASM_CHECK_UNDEF(-lsframe, sframe_)
   KDUMP_DIS_ASM_CHECK_UNDEF(-liberty, htab_create|splay_tree_new)
-  KDUMP_DIS_ASM_CHECK_UNDEF(-lz, inflate)
+  KDUMP_DIS_ASM_CHECK_UNDEF(-lz, inflate|uncompress2)
   KDUMP_DIS_ASM_CHECK_UNDEF(-lzstd, ZSTD_)
   KDUMP_DIS_ASM_CHECK_UNDEF(-ldl, dlopen)
   AS_IF([test yes != "$kdump_res"],
