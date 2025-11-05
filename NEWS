@@ -1,6 +1,9 @@
-next
-----
+0.5.6
+-----
+  * Move to Codeberg.
   * Remove legacy Python bindings. Use pykdumpfile instead.
+  * Fix test build failures.
+  * Fix missing -lz in some scenarios.
 
 0.5.5
 -----
