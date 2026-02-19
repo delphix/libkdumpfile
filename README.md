@@ -57,7 +57,7 @@ Python
 ------
 
 There are official Python bindings for `libkdumpfile`; see
-[pykdumpfile](https://github.com/ptesarik/pykdumpfile).
+[pykdumpfile](https://codeberg.org/ptesarik/pykdumpfile).
 
 Making Releases
 ---------------

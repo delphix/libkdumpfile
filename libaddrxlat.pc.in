@@ -5,7 +5,7 @@ includedir=@includedir@
 
 Name: libaddrxlat
 Description: Address space translation
-URL: https://github.com/ptesarik/libkdumpfile
+URL: https://codeberg.org/ptesarik/libkdumpfile
 Version: @PACKAGE_VERSION@
 
 Requires:
