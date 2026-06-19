@@ -159,7 +159,7 @@ looks_like_kcode_s390(struct dump_desc *dd, uint64_t addr)
 	info.arch          = bfd_arch_s390;
 	info.mach          = bfd_mach_s390_64;
 	disassemble_init_for_target(&info);
-	print_insn = disassembler(bfd_arch_s390, TRUE,
+	print_insn = disassembler(bfd_arch_s390, 1,
 				  bfd_mach_s390_64, NULL);
 	if (!print_insn)
 		return 0;
