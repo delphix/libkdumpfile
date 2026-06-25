@@ -45,7 +45,7 @@ AC_DEFUN([KDUMP_DIS_ASM_LIBS],[dnl determine disassembler libraries
 DIS_ASM_LIBS=-lopcodes
 AC_LANG_CONFTEST([AC_LANG_PROGRAM(
   [#include <dis-asm.h>],
-  [disassembler(bfd_arch_i386, FALSE, bfd_mach_x86_64, NULL);])])
+  [disassembler(bfd_arch_i386, 0, bfd_mach_x86_64, NULL);])])
 dnl ignore undefined symbols from missing linker dependencies
 AC_MSG_CHECKING([for disassembler in $DIS_ASM_LIBS])
 KDUMP_TRY_LINK_UNDEF($DIS_ASM_LIBS, [-Wl,--require-defined=disassembler])
