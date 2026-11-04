@@ -396,7 +396,7 @@ add_linux_linear_map(struct os_init_data *ctl)
  *
  *   16  offset within a 64k page
  *   13  index in a level 3 table
- *   13  index in a level 3 table
+ *   13  index in a level 2 table
  *  ---
  *   42  sum
  */
