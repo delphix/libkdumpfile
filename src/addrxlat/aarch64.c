@@ -386,6 +386,23 @@ add_linux_linear_map(struct os_init_data *ctl)
 	return sys_set_layout(ctl, ADDRXLAT_SYS_MAP_KPHYS_DIRECT, layout);
 }
 
+/** TTBR1 offset for Linux built with 52-bit VA and booted with 48-bit VA.
+ * Offset into a 52-bit pgdir corresponding to the pgdir entry that covers
+ * the lowest 48-bit addressable VA.
+ *
+ * The number 42 below is not the Answer to the Great Question of Life,
+ * the Universe and Everything, but the number of VA bits translated by
+ * a single pgd entry:
+ *
+ *   16  offset within a 64k page
+ *   13  index in a level 3 table
+ *   13  index in a level 3 table
+ *  ---
+ *   42  sum
+ */
+#define LINUX_TTBR1_BADDR_4852_OFFSET \
+	((ADDR_MASK(52 - 42) - ADDR_MASK(48 - 42)) << 3)
+
 /** Initialize a translation map for Linux/aarch64.
  * @param ctl  Initialization data.
  * @returns	  Error status.
@@ -393,6 +410,7 @@ add_linux_linear_map(struct os_init_data *ctl)
 static addrxlat_status
 map_linux_aarch64(struct os_init_data *ctl)
 {
+	addrxlat_addr_t va_bits;
 	addrxlat_meth_t *meth;
 	addrxlat_status status;
 
@@ -403,6 +421,13 @@ map_linux_aarch64(struct os_init_data *ctl)
 		status = get_linux_pgtroot(ctl, &meth->param.pgt.root);
 		if (status != ADDRXLAT_OK)
 			return status;
+		if (ctl->popt.page_shift == 16 && ctl->popt.virt_bits == 48) {
+			status = get_number(ctl->ctx, "VA_BITS", &va_bits);
+			if (status == ADDRXLAT_OK && va_bits == 52)
+				meth->param.pgt.root.addr +=
+					LINUX_TTBR1_BADDR_4852_OFFSET;
+			clear_error(ctl->ctx);
+		}
 	}
 
 	status = sys_set_physmaps(ctl, PHYSADDR_MASK);
