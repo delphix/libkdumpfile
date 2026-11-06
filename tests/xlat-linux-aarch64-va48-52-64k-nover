@@ -1,0 +1,15 @@
+#! /bin/bash
+
+#
+# Check Linux AArch64 translation built for 52-bit virtual addresses, but
+# booted with only 48-bit virtual addresses.
+# Use only data from VMCOREINFO, no explicit version.
+#
+
+opts=(
+    arch=aarch64
+    ostype=linux
+    page_shift=16
+)
+
+. "$srcdir"/xlat-os-common

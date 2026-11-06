@@ -1,0 +1,15 @@
+@VALUE(_stext)
+ffffbb5567630000
+@VALUE(swapper_pg_dir)
+ffffbb5568f60000
+
+# Configured for 52-bit VA:
+@NUMBER(VA_BITS)
+34
+
+# Booted with 48-bit VA:
+@NUMBER(TCR_EL1_T1SZ)
+10
+
+@NUMBER(kimage_voffset)
+ffffbb5564400000
